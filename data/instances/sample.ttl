@@ -1,0 +1,6 @@
+@prefix ex: <https://example.org/ontorag-demo/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+ex:OntoRAG a ex:Tool ;
+    rdfs:label "OntoRAG" ;
+    ex:supports "SPARQL 查询"@zh .

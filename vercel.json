@@ -1,0 +1,16 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "app.py": {
+      "excludeFiles": "{data/**,setup.ps1,start.ps1,README.md,Dockerfile}"
+    }
+  },
+  "daemons": {
+    "ontorag-worker": {
+      "root": ".",
+      "entrypoint": "Dockerfile",
+      "instances": { "iad1": 1 },
+      "terminationGracePeriodSeconds": 300
+    }
+  }
+}

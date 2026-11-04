@@ -1,0 +1,4 @@
+ontorag[pdf]==0.1.13
+sqlalchemy==2.1.6
+psycopg[binary]==3.3.7
+vercel-blob==0.5.1

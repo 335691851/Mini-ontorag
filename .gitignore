@@ -1,0 +1,7 @@
+.venv/
+.env
+data/dto/
+data/objects/
+data/service.db
+__pycache__/
+*.log
