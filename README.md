@@ -1,6 +1,6 @@
 # OntoRAG 文件知识图谱服务
 
-面向单一业务系统的 API：上传文档后，后台 worker 用 [OntoRAG](https://github.com/ontorag/ontorag) 执行 `ingest` 与 `extract-instances`。全部制度共用版本化的[法务与审计领域本体](ontorag_service/resources/legal_audit_v1.json)，文档图只记录实体、关系、属性与原文出处。REST 与 MCP 支持跨文件查询。模型配置为 DeepSeek `deepseek-flash`。
+面向单一业务系统的 API：上传文档后，后台 worker 用 [OntoRAG](https://github.com/ontorag/ontorag) 执行 `ingest` 与 `extract-instances`。全部制度共用版本化的[法务与审计领域本体](ontorag_service/resources/legal_audit_v1.json)，文档图只记录实体、关系、属性与原文出处。REST 与 MCP 支持跨文件查询。模型配置为 DeepSeek `deepseek-flash`。领域模型的范围与数据分层见[本体建模说明](docs/DOMAIN_ONTOLOGY.md)。
 
 ## 本地运行
 
