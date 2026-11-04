@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>__VIEWER_TITLE__</title>
+  <style>
+    :root { color-scheme: light; --bg:#f4f7fb; --surface:#fff; --ink:#1b2a41; --muted:#61718a; --line:#dce4ed; --blue:#1e66d0; --purple:#7651bd; --orange:#e48226; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif; background:var(--bg); color:var(--ink); }
+    header { padding:18px 26px 14px; background:var(--surface); border-bottom:1px solid var(--line); }
+    h1 { font-size:22px; margin:0 0 5px; }
+    .sub { color:var(--muted); font-size:13px; }
+    .toolbar { display:flex; flex-wrap:wrap; gap:9px 14px; align-items:end; padding:14px 26px; background:var(--surface); border-bottom:1px solid var(--line); }
+    label { color:var(--muted); font-size:12px; display:flex; flex-direction:column; gap:4px; }
+    select,input,button { font:inherit; }
+    select,input[type=search] { border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink); padding:8px 10px; height:38px; }
+    #docSelect { width:min(560px,calc(100vw - 52px)); }
+    #search { width:220px; }
+    .buttons { display:flex; gap:4px; align-items:center; }
+    button { border:1px solid var(--line); background:#fff; border-radius:8px; color:var(--ink); padding:8px 12px; height:38px; cursor:pointer; }
+    button.active { background:var(--blue); color:#fff; border-color:var(--blue); }
+    .check { flex-direction:row; align-items:center; gap:5px; padding-bottom:8px; white-space:nowrap; cursor:pointer; }
+    .layout { display:grid; grid-template-columns:280px minmax(300px,1fr) 320px; gap:14px; padding:14px; min-height:calc(100vh - 160px); }
+    .panel { background:var(--surface); border:1px solid var(--line); border-radius:12px; min-width:0; overflow:hidden; }
+    .panel h2 { font-size:15px; margin:0; padding:14px 16px 8px; }
+    .panel-body { padding:0 16px 16px; }
+    .small { font-size:12px; color:var(--muted); }
+    .metrics { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; margin:10px 0 15px; }
+    .metric { background:#f3f7fd; border-radius:8px; padding:8px; }
+    .metric b { display:block; font-size:20px; color:var(--blue); }
+    .list { max-height:calc(100vh - 350px); overflow:auto; border-top:1px solid var(--line); }
+    .list button { display:block; width:100%; height:auto; text-align:left; border:0; border-bottom:1px solid #edf1f6; border-radius:0; padding:9px 16px; }
+    .list button:hover,.list button.selected { background:#eaf2ff; }
+    .list strong { display:block; font-weight:600; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .list span { display:block; font-size:11px; color:var(--muted); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    #canvas { position:relative; min-height:650px; height:calc(100vh - 190px); }
+    svg { width:100%; height:100%; display:block; cursor:grab; }
+    svg:active { cursor:grabbing; }
+    .link { stroke:#99a8ba; stroke-width:1.5; opacity:.6; cursor:pointer; }
+    .link:hover { stroke:var(--orange); stroke-width:3; opacity:1; }
+    .node circle { fill:var(--blue); stroke:#fff; stroke-width:1.5; cursor:pointer; }
+    .node.ontology circle { fill:var(--purple); }
+    .node.selected circle { fill:var(--orange); stroke:#a65109; stroke-width:2.5; }
+    .node text,.edge-label { fill:var(--ink); font-size:11px; paint-order:stroke; stroke:#fff; stroke-width:3px; stroke-linejoin:round; pointer-events:none; }
+    .edge-label { fill:#56677f; font-size:10px; }
+    #detail { max-height:calc(100vh - 200px); overflow:auto; }
+    .detail-title { font-size:17px; line-height:1.45; font-weight:700; overflow-wrap:anywhere; }
+    .tag { display:inline-block; background:#eaf2ff; color:#1855ac; border-radius:5px; padding:3px 6px; font-size:11px; margin:7px 0; }
+    .section-title { font-size:13px; font-weight:700; margin:16px 0 6px; }
+    .field { font-size:12px; line-height:1.5; padding:6px 0; border-bottom:1px solid #edf1f6; overflow-wrap:anywhere; }
+    .field b { color:#42536b; }
+    .quote { margin:8px 0; padding:9px; border-left:3px solid var(--orange); background:#fff8f1; border-radius:0 6px 6px 0; font-size:12px; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .iri { font-size:10px; overflow-wrap:anywhere; color:var(--muted); margin-top:10px; }
+    .empty { color:var(--muted); font-size:13px; line-height:1.6; }
+    .hint { position:absolute; bottom:12px; left:14px; font-size:11px; color:var(--muted); background:rgba(255,255,255,.88); padding:5px 8px; border-radius:5px; pointer-events:none; }
+    @media(max-width:1100px) { .layout { grid-template-columns:220px minmax(250px,1fr); } #detailPanel { grid-column:1 / -1; } #detail { max-height:none; } }
+    @media(max-width:700px) { .layout { display:block; } .panel { margin-bottom:12px; } #canvas { height:520px; min-height:520px; } .list { max-height:220px; } #search { width:min(220px,calc(100vw - 52px)); } }
+  </style>
+</head>
+<body>
+  <header><h1>__VIEWER_TITLE__</h1><div id="summary" class="sub"></div></header>
+  <div class="toolbar">
+    <label>制度文件<select id="docSelect"></select></label>
+    <div class="buttons" role="group" aria-label="图谱视图"><button type="button" id="instancesBtn" class="active">实体关系</button><button type="button" id="ontologyBtn">本体结构</button></div>
+    <label>查找实体或类型<input id="search" type="search" placeholder="输入名称或关系"></label>
+    <label class="check"><input id="isolated" type="checkbox">包含未连线节点</label>
+    <label class="check"><input id="edgeNames" type="checkbox">显示关系名称</label>
+    <button type="button" id="reset">重置视图</button>
+  </div>
+  <main class="layout">
+    <section class="panel"><h2 id="listTitle">实体</h2><div class="panel-body"><div id="documentInfo" class="small"></div><div id="metrics" class="metrics"></div><div id="listCount" class="small"></div></div><div id="nodeList" class="list"></div></section>
+    <section class="panel" id="canvas"><svg id="graph" role="img" aria-label="知识图谱交互视图"></svg><div class="hint">拖动节点 · 滚轮缩放 · 拖动空白处平移 · 点击节点或连线查看详情</div></section>
+    <section class="panel" id="detailPanel"><h2>详细信息</h2><div id="detail" class="panel-body"><div class="empty">点击图中的实体或关系，查看属性、关联和原文依据。</div></div></section>
+  </main>
+  <script>__D3_BUNDLE__</script>
+  <script>
+    const DATA = __GRAPH_DATA__;
+    const $ = id => document.getElementById(id);
+    let docIndex = 0, mode = 'instances', selectedId = null, simulation = null, currentNodes = [], currentEdges = [], zoomBehavior = null;
+    const safeText = value => String(value ?? '');
+    const short = (value, max=14) => safeText(value).length > max ? safeText(value).slice(0,max) + '…' : safeText(value);
+    const make = (tag, text, className) => { const node=document.createElement(tag); node.textContent=safeText(text); if(className) node.className=className; return node; };
+    const current = () => DATA.documents[docIndex];
+    const rawGraph = () => current()[mode];
+    function init() {
+      $('summary').textContent = `${DATA.documents.length} 份制度 · ${DATA.totals.entities} 个实体 · ${DATA.totals.relations} 条实例关系；点击节点可查看属性和原文引用`;
+      DATA.documents.forEach((doc,index) => { const option=document.createElement('option'); option.value=index; option.textContent=`${doc.folder} · ${doc.title}`; $('docSelect').appendChild(option); });
+      $('docSelect').addEventListener('change', event => { docIndex=Number(event.target.value); selectedId=null; $('search').value=''; render(); });
+      $('instancesBtn').addEventListener('click', () => setMode('instances'));
+      $('ontologyBtn').addEventListener('click', () => setMode('ontology'));
+      $('isolated').addEventListener('change', render);
+      $('edgeNames').addEventListener('change', render);
+      $('search').addEventListener('input', () => { updateList(); highlightSearch(); });
+      $('reset').addEventListener('click', () => { $('search').value=''; selectedId=null; render(); });
+      render();
+    }
+    function setMode(next) {
+      mode=next; selectedId=null; $('search').value='';
+      $('instancesBtn').classList.toggle('active',next==='instances');
+      $('ontologyBtn').classList.toggle('active',next==='ontology');
+      render();
+    }
+    function metric(label,value) { const box=make('div','', 'metric'); box.append(make('b',value),make('span',label)); return box; }
+    function render() {
+      if (simulation) simulation.stop();
+      const doc=current(), raw=rawGraph(), includeIsolated=$('isolated').checked;
+      const touched=new Set(raw.edges.flatMap(edge=>[edge.source,edge.target]));
+      currentNodes=raw.nodes.filter(node=>includeIsolated || touched.has(node.id)).map(node=>({...node}));
+      const ids=new Set(currentNodes.map(node=>node.id));
+      currentEdges=raw.edges.filter(edge=>ids.has(edge.source)&&ids.has(edge.target)).map(edge=>({...edge}));
+      $('documentInfo').textContent=`${doc.folder} · ${doc.title}`;
+      $('metrics').replaceChildren(metric(mode==='instances'?'实体总数':'类总数',raw.nodes.length),metric('关系总数',raw.edges.length));
+      $('listTitle').textContent=mode==='instances'?'实体':'本体类';
+      updateList();
+      if(!selectedId) $('detail').replaceChildren(make('div',mode==='instances'?'点击实体或连线，查看属性、关系表达和原文依据。':'点击本体类或连线，查看类的数据属性和关系定义。','empty'));
+      draw();
+    }
+    function updateList() {
+      const list=$('nodeList'), search=$('search').value.trim().toLowerCase();
+      const degree=new Map(); currentEdges.forEach(edge=>{degree.set(edge.source,(degree.get(edge.source)||0)+1);degree.set(edge.target,(degree.get(edge.target)||0)+1);});
+      const matches=rawGraph().nodes.filter(node=>!search || `${node.label} ${node.type}`.toLowerCase().includes(search))
+        .sort((a,b)=>(degree.get(b.id)||0)-(degree.get(a.id)||0)||a.label.localeCompare(b.label,'zh-CN'));
+      $('listCount').textContent=`${matches.length} 个匹配节点${matches.length>80?'，显示前 80 个':''}`;
+      list.replaceChildren();
+      matches.slice(0,80).forEach(node=>{ const btn=make('button','');btn.type='button';btn.classList.toggle('selected',node.id===selectedId);btn.append(make('strong',node.label),make('span',`${node.type} · ${degree.get(node.id)||0} 条关联`));btn.addEventListener('click',()=>selectNode(node.id,true));list.appendChild(btn); });
+    }
+    function highlightSearch() {
+      const query=$('search').value.trim().toLowerCase();
+      d3.selectAll('.node').style('opacity',d=>!query||`${d.label} ${d.type}`.toLowerCase().includes(query)?1:.18);
+      d3.selectAll('.link').style('opacity',d=>!query||d.label.toLowerCase().includes(query)?null:.18);
+    }
+    function draw() {
+      const svg=d3.select('#graph'); svg.selectAll('*').remove();
+      const bounds=$('canvas').getBoundingClientRect(), width=Math.max(bounds.width,300), height=Math.max(bounds.height,500);
+      svg.attr('viewBox',`0 0 ${width} ${height}`);
+      const defs=svg.append('defs');defs.append('marker').attr('id','arrow').attr('viewBox','0 -5 10 10').attr('refX',19).attr('refY',0).attr('markerWidth',5).attr('markerHeight',5).attr('orient','auto').append('path').attr('d','M0,-5L10,0L0,5').attr('fill','#99a8ba');
+      const layer=svg.append('g'); zoomBehavior=d3.zoom().scaleExtent([.15,4]).on('zoom',event=>layer.attr('transform',event.transform));svg.call(zoomBehavior);
+      const links=layer.append('g').selectAll('line').data(currentEdges).join('line').attr('class','link').attr('marker-end','url(#arrow)').on('click',(event,edge)=>{event.stopPropagation();selectEdge(edge);});
+      const edgeLabels=layer.append('g').selectAll('text').data(currentEdges).join('text').attr('class','edge-label').text(edge=>short(edge.label,18)).style('display',$('edgeNames').checked?null:'none');
+      const nodes=layer.append('g').selectAll('g').data(currentNodes).join('g').attr('class',mode==='ontology'?'node ontology':'node').on('click',(event,node)=>{event.stopPropagation();selectNode(node.id,false);});
+      nodes.append('circle').attr('r',node=>Math.min(15,7+Math.sqrt(currentEdges.filter(edge=>edge.source===node.id||edge.target===node.id).length)*2));
+      nodes.append('text').attr('x',12).attr('y',4).text(node=>short(node.label,12));
+      nodes.append('title').text(node=>`${node.label} · ${node.type}`);
+      const drag=d3.drag().on('start',(event,node)=>{if(!event.active)simulation.alphaTarget(.3).restart();node.fx=node.x;node.fy=node.y;}).on('drag',(event,node)=>{node.fx=event.x;node.fy=event.y;}).on('end',(event,node)=>{if(!event.active)simulation.alphaTarget(0);node.fx=null;node.fy=null;});nodes.call(drag);
+      simulation=d3.forceSimulation(currentNodes).force('link',d3.forceLink(currentEdges).id(node=>node.id).distance(mode==='ontology'?120:100).strength(.35)).force('charge',d3.forceManyBody().strength(-240)).force('center',d3.forceCenter(width/2,height/2)).force('collision',d3.forceCollide(26)).on('tick',()=>{
+        links.attr('x1',edge=>edge.source.x).attr('y1',edge=>edge.source.y).attr('x2',edge=>edge.target.x).attr('y2',edge=>edge.target.y);
+        edgeLabels.attr('x',edge=>(edge.source.x+edge.target.x)/2).attr('y',edge=>(edge.source.y+edge.target.y)/2-4);
+        nodes.attr('transform',node=>`translate(${node.x},${node.y})`);
+      });
+      svg.on('click',()=>{ selectedId=null;nodes.classed('selected',false);$('detail').replaceChildren(make('div','点击节点或连线查看详情。','empty'));updateList(); });
+      highlightSearch();
+    }
+    function selectNode(id,focus) {
+      const node=rawGraph().nodes.find(item=>item.id===id);if(!node)return;
+      selectedId=id; updateList(); d3.selectAll('.node').classed('selected',item=>item.id===id);
+      const detail=$('detail');detail.replaceChildren(make('div',node.label,'detail-title'),make('span',node.type,'tag'));
+      const related=rawGraph().edges.filter(edge=>edge.source===id||edge.target===id);
+      detail.append(make('div',`关联关系（${related.length}）`,'section-title'));
+      if(!related.length)detail.append(make('div','无已抽取的对象关系','empty'));
+      for(const edge of related.slice(0,80)) { const otherId=edge.source===id?edge.target:edge.source;const other=rawGraph().nodes.find(item=>item.id===otherId);detail.append(make('div',`${edge.source===id?'→':'←'} ${edge.label} · ${other?.label||short(otherId,30)}`,'field')); }
+      detail.append(make('div',mode==='ontology'?'数据属性':'属性与表达','section-title'));
+      if(!node.attributes.length)detail.append(make('div','无属性值','empty'));
+      for(const attribute of node.attributes) {const row=make('div','', 'field');row.append(make('b',attribute.name+'：'),document.createTextNode(attribute.value));detail.append(row);}
+      if(node.evidence.length){detail.append(make('div',`原文依据（${node.evidence.length}）`,'section-title'));for(const quote of node.evidence)detail.append(make('div',quote,'quote'));}
+      detail.append(make('div',node.id,'iri'));
+      if(focus){const positioned=currentNodes.find(item=>item.id===id);if(positioned?.x!==undefined){const box=$('canvas').getBoundingClientRect();d3.select('#graph').transition().duration(450).call(zoomBehavior.transform,d3.zoomIdentity.translate(box.width/2,box.height/2).scale(1.5).translate(-positioned.x,-positioned.y));}}
+    }
+    function selectEdge(edge) {
+      selectedId=null;updateList();d3.selectAll('.node').classed('selected',false);
+      const nodes=rawGraph().nodes,source=nodes.find(node=>node.id===(edge.source.id||edge.source)),target=nodes.find(node=>node.id===(edge.target.id||edge.target));
+      const detail=$('detail');detail.replaceChildren(make('div',edge.label,'detail-title'),make('span','关系','tag'));
+      detail.append(make('div',`${source?.label||'源实体'} → ${target?.label||'目标实体'}`,'field'));
+      detail.append(make('div',edge.iri,'iri'));
+    }
+    init();
+  </script>
+</body>
+</html>
