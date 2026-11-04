@@ -1,6 +1,6 @@
 # OntoRAG 文件知识图谱服务
 
-面向单一业务系统的 API：上传文档后，后台 worker 用 [OntoRAG](https://github.com/ontorag/ontorag) 执行 `run-stage propose` 与 `run-stage extract`，将 RDF 图持久保存，再通过 REST 与 MCP 查询。模型配置为 DeepSeek `deepseek-flash`。
+面向单一业务系统的 API：上传文档后，后台 worker 用 [OntoRAG](https://github.com/ontorag/ontorag) 执行 `ingest` 与 `extract-instances`。全部制度共用版本化的[法务与审计领域本体](ontorag_service/resources/legal_audit_v1.json)，文档图只记录实体、关系、属性与原文出处。REST 与 MCP 支持跨文件查询。模型配置为 DeepSeek `deepseek-flash`。
 
 ## 本地运行
 
@@ -38,13 +38,13 @@ notepad .env
 | `OPENROUTER_MODEL` | `deepseek-flash` |
 | `STORAGE_BACKEND` | `blob` |
 | `ONTORAG_API_BASE_URL` | 常驻 worker 通过 API Function 访问私有 Blob 的 Production 地址，例如 `https://mini-ontorag.vercel.app` |
-| `ONTORAG_BASE_IRI` | 生成图所用的稳定命名空间，例如 `https://your-domain.example/kg/` |
+| `ONTORAG_BASE_IRI` | 旧版逐文件本体流程保留的配置；共享本体命名空间由版本化资源文件固定 |
 
 同一密钥用于全部文档。不要提交 `.env`。`vercel.json` 默认将 worker 放在 `iad1`；数据库与 Blob 尽量选邻近区域。部署后先检查 `/health`，再按 [对接说明](docs/INTEGRATION.md) 上传测试文档并轮询状态。2026-11-04 已在 Production 完成 16 份制度文件的真实抽取，并验证图谱、本体与 SPARQL 查询。
 
 ## 查看知识图谱
 
-在线接口 `GET /v1/documents/{id}/graph` 与 `/schema` 返回 Turtle RDF，需要 Bearer 密钥。要在本地查看实体、关系、属性表达和原文引用，可用 `scripts/build_graph_viewer.py` 从下载的 Turtle 文件生成离线 HTML。脚本需要每份文档的 `{document_id}.graph.ttl`、`{document_id}.schema.ttl`，以及包含 `id`、`source` 的导入记录 JSON。D3 7.9.0 的 `d3.min.js` 会被内嵌到生成的 HTML 中，打开 HTML 时不需要联网或输入服务密钥。查看器展示的是单文件候选本体和实例图；跨文件共享领域本体、概念对齐与联合查询尚未实现。
+在线接口 `GET /v1/ontology/ttl` 返回共用本体；`GET /v1/documents/{id}/graph` 返回每份文件的事实与出处，均需 Bearer 密钥。`GET /v1/knowledge-graph/summary` 和 `POST /v1/knowledge-graph/sparql` 查询整个领域知识图谱。离线查看器由 `scripts/build_graph_viewer.py` 从下载的 Turtle 文件生成，默认显示整个领域本体，并允许切换到单份文件的实例和原文依据。重新抽取后应重新下载全部图再生成查看器。
 
 ```powershell
 $viewer = 'C:\path\to\知识图谱查看' # 改为本机实际目录
@@ -56,8 +56,8 @@ $viewer = 'C:\path\to\知识图谱查看' # 改为本机实际目录
 ## 当前范围
 
 - 直传上限 4 MiB，支持 Markdown、TXT、HTML、EPUB、PDF。大文件需要增加直传 Blob 流程。
-- 每份文档形成独立知识图谱，查询和 MCP 工具均需 `document_id`。当前不做跨文档联合查询。
-- 提案自动进入抽取，没有人工审查本体的审批环节。
+- 共用 `legal-audit-v1` 本体（35 个类、37 个对象关系、15 个数据属性）；实例按文档留存出处，联合查询聚合最多 100 份已按当前版本抽取的文件。
+- 本体是首版领域模型，需要法务与审计人员确认概念边界。模型只抽取文件中明确提及的候选事实，不据此自动认定真实违规或法律责任。
 - Worker 最多重试 3 次；失败后可调用 `/v1/documents/{id}/retry`。中断任务在租约到期后重新领取。
 - Worker 处理时每分钟续租；同一任务不会在租约过期后由旧 worker 覆盖新结果。
 - 图和原文的持久化依赖私有 Blob；任务状态依赖 Postgres。缺任一资源时无法完成生产部署。

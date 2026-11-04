@@ -29,15 +29,18 @@ class IntegrationTest(unittest.TestCase):
             os.environ["OPENROUTER_API_KEY"] = "test-key"
             from app import app
             from ontorag_service import worker
+            from ontorag_service.domain import schema_card, schema_turtle
+            namespace = schema_card()["namespace"]
 
-            def fake_stage(_cli, stage, root):
+            def fake_stage(_cli, root, stage, *args):
                 target = root / "ontology"
                 target.mkdir(exist_ok=True)
-                if stage == "propose":
-                    (target / "proposals.raw.jsonl").write_text('{"chunk_id":"demo"}\n', encoding="utf-8")
+                if stage == "ingest":
+                    chunks = root / "dto" / "chunks"
+                    chunks.mkdir(parents=True)
+                    (chunks / "demo.jsonl").write_text('{"chunk_id":"demo"}\n', encoding="utf-8")
                 else:
-                    (target / "schema.ttl").write_text("@prefix ex: <https://example.org/> . ex:Thing a <http://www.w3.org/2000/01/rdf-schema#Class> .", encoding="utf-8")
-                    (target / "world.ttl").write_text("@prefix ex: <https://example.org/> . ex:alice a ex:Thing .", encoding="utf-8")
+                    (target / "world.ttl").write_text(f"@prefix la: <{namespace}> . la:alice a la:Role .", encoding="utf-8")
 
             with TestClient(app) as client:
                 headers = {"Authorization": "Bearer test-secret"}
@@ -50,12 +53,14 @@ class IntegrationTest(unittest.TestCase):
                 self.assertEqual(uploaded.headers["Cache-Control"], "no-store")
                 again = client.post("/v1/documents", headers={**headers, "Idempotency-Key": "sample-1"}, files={"file": ("sample.md", b"Alice is a thing.", "text/markdown")})
                 self.assertEqual(again.json()["id"], doc_id)
-                with patch.object(worker, "_cli", return_value="ontorag"), patch.object(worker, "_run_stage", side_effect=fake_stage):
+                with patch.object(worker, "_cli", return_value="ontorag"), patch.object(worker, "_run_cli", side_effect=fake_stage):
                     self.assertTrue(worker.run_once())
                 self.assertEqual(client.get(f"/v1/documents/{doc_id}", headers=headers).json()["status"], "completed")
+                self.assertEqual(client.get(f"/v1/documents/{doc_id}", headers=headers).json()["ontology_version"], "legal-audit-v1")
                 self.assertIn("alice", client.get(f"/v1/documents/{doc_id}/graph", headers=headers).text)
-                self.assertIn("Thing", client.get(f"/v1/documents/{doc_id}/schema", headers=headers).text)
-                result = client.post(f"/v1/documents/{doc_id}/sparql", headers=headers, content="SELECT ?s WHERE { ?s a <https://example.org/Thing> }")
+                self.assertIn("Role", client.get(f"/v1/documents/{doc_id}/schema", headers=headers).text)
+                self.assertIn("Role", client.get("/v1/ontology/ttl", headers=headers).text)
+                result = client.post(f"/v1/documents/{doc_id}/sparql", headers=headers, content=f"SELECT ?s WHERE {{ ?s a <{namespace}Role> }}")
                 self.assertEqual(result.status_code, 200)
                 self.assertEqual(len(result.json()["results"]["bindings"]), 1)
                 bad = client.post(f"/v1/documents/{doc_id}/sparql", headers=headers, content="DELETE WHERE { ?s ?p ?o }")
@@ -66,11 +71,12 @@ class IntegrationTest(unittest.TestCase):
                 tools = client.post("/mcp/", headers=mcp_headers, json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
                 self.assertEqual(tools.status_code, 200)
                 self.assertIn("sparql_select", tools.text)
+                self.assertIn("sparql_select_domain", tools.text)
                 openapi = client.get("/openapi.json", headers=headers).json()
                 self.assertIn("application/sparql-query", openapi["paths"]["/v1/documents/{document_id}/sparql"]["post"]["requestBody"]["content"])
                 self.assertEqual(openapi["paths"]["/v1/documents"]["post"]["security"], [{"ServiceBearer": []}])
                 self.assertEqual(client.get("/openapi.json").status_code, 401)
-                call = client.post("/mcp/", headers=mcp_headers, json={"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "sparql_select", "arguments": {"document_id": doc_id, "query": "SELECT ?s WHERE { ?s a <https://example.org/Thing> }"}}})
+                call = client.post("/mcp/", headers=mcp_headers, json={"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "sparql_select", "arguments": {"document_id": doc_id, "query": f"SELECT ?s WHERE {{ ?s a <{namespace}Role> }}"}}})
                 self.assertEqual(call.status_code, 200)
                 self.assertIn("alice", call.text)
                 self.assertEqual(client.post("/mcp/", json={"jsonrpc": "2.0", "id": 4, "method": "tools/list", "params": {}}).status_code, 401)
@@ -84,11 +90,16 @@ class IntegrationTest(unittest.TestCase):
                 self.assertEqual(client.get(source_url, headers=internal_headers).content, b"Worker source")
                 self.assertEqual(client.post(artifact_url, headers=headers, files={}).status_code, 422)
                 artifacts = client.post(artifact_url, headers=internal_headers, files={
-                    "graph": ("world.ttl", b"@prefix ex: <https://example.org/> . ex:bob a ex:Thing .", "text/turtle"),
-                    "schema": ("schema.ttl", b"@prefix ex: <https://example.org/> . ex:Thing a <http://www.w3.org/2000/01/rdf-schema#Class> .", "text/turtle"),
+                    "graph": ("world.ttl", f"@prefix la: <{namespace}> . la:bob a la:Role .".encode(), "text/turtle"),
+                    "schema": ("schema.ttl", schema_turtle(), "text/turtle"),
                 })
                 self.assertEqual(artifacts.status_code, 200)
                 self.assertEqual(client.get(f"/v1/documents/{internal}", headers=headers).json()["status"], "completed")
+                summary = client.get("/v1/knowledge-graph/summary", headers=headers)
+                self.assertEqual(summary.json()["documents"], 1)
+                domain_query = client.post("/v1/knowledge-graph/sparql", headers=headers, content=f"SELECT ?s WHERE {{ ?s a <{namespace}Role> }}")
+                self.assertEqual(len(domain_query.json()["results"]["bindings"]), 1)
+                self.assertIn("alice", domain_query.text)
                 self.assertEqual(client.get(source_url, headers=internal_headers).status_code, 409)
                 self.assertEqual(client.delete(f"/v1/documents/{doc_id}", headers=headers).status_code, 204)
                 self.assertEqual(client.get(f"/v1/documents/{doc_id}", headers=headers).status_code, 404)
@@ -102,6 +113,9 @@ class IntegrationTest(unittest.TestCase):
                 self.assertFalse(worker.renew_lease(another, token))
                 with self.assertRaises(RuntimeError):
                     worker.set_stage(another, token, "extract")
+                reprocessed = client.post(f"/v1/documents/{internal}/reprocess", headers=headers)
+                self.assertEqual(reprocessed.status_code, 202)
+                self.assertIsNone(reprocessed.json()["ontology_version"])
             from ontorag_service.db import engine
             engine.dispose()
 

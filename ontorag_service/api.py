@@ -13,10 +13,12 @@ from sqlalchemy import select
 
 from .config import API_KEYS, MAX_UPLOAD_BYTES
 from .db import Document, Session, document_data, get_document, init_db, list_documents
-from .graph import describe, select_query
+from .graph import describe, select_query, select_domain_query, domain_summary
 from .storage import delete_bytes, get_bytes, put_bytes
 from .mcp_api import mcp
 from .ontology import valid_schema_turtle
+from .domain import ONTOLOGY_VERSION, schema_card, schema_turtle, validate_instance_graph
+from rdflib import Graph
 
 ALLOWED = {".md", ".txt", ".html", ".htm", ".epub", ".pdf"}
 logger = logging.getLogger(__name__)
@@ -30,6 +32,7 @@ class DocumentOut(BaseModel):
     stage: str | None
     error: str | None
     attempts: int
+    ontology_version: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -159,12 +162,23 @@ async def worker_artifacts(
     graph: UploadFile = File(...),
     schema_file: UploadFile = File(..., alias="schema"),
     x_worker_lease: str | None = Header(default=None),
+    x_ontology_version: str | None = Header(default=None),
 ):
     _active_worker_document(document_id, x_worker_lease)
+    if x_ontology_version is not None and x_ontology_version != ONTOLOGY_VERSION:
+        raise HTTPException(409, "unknown ontology version")
     graph_data = await graph.read(MAX_UPLOAD_BYTES + 1)
     schema_data = valid_schema_turtle(await schema_file.read(MAX_UPLOAD_BYTES + 1), document_id)
     if not graph_data or not schema_data or len(graph_data) + len(schema_data) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "graph and schema must be nonempty and at most MAX_UPLOAD_BYTES combined")
+    if x_ontology_version:
+        try:
+            parsed_graph = Graph().parse(data=graph_data.decode("utf-8"), format="turtle")
+            validate_instance_graph(parsed_graph)
+            if set(Graph().parse(data=schema_data.decode("utf-8"), format="turtle")) != set(Graph().parse(data=schema_turtle().decode("utf-8"), format="turtle")):
+                raise ValueError("schema does not match current domain ontology")
+        except Exception as exc:
+            raise HTTPException(422, f"invalid domain graph: {exc}") from exc
     graph_key = schema_key = None
     try:
         graph_key = put_bytes(f"graphs/{document_id}/{x_worker_lease}/world.ttl", graph_data, "text/turtle")
@@ -175,6 +189,7 @@ async def worker_artifacts(
                 raise HTTPException(409, "worker lease is not active")
             doc.graph_key = graph_key
             doc.schema_key = schema_key
+            doc.ontology_version = x_ontology_version
             doc.status = "completed"
             doc.stage = None
             doc.error = None
@@ -238,6 +253,51 @@ def retry_document(document_id: str):
         doc.lease_until = None
         doc.updated_at = datetime.now(timezone.utc)
         return document_data(doc)
+
+
+@app.post("/v1/documents/{document_id}/reprocess", status_code=202, response_model=DocumentOut, tags=["Documents"])
+def reprocess_document(document_id: str):
+    with Session.begin() as session:
+        doc = session.scalars(select(Document).where(Document.id == document_id).with_for_update()).first()
+        if not doc:
+            raise HTTPException(404, "document not found")
+        if doc.status in ("queued", "processing"):
+            raise HTTPException(409, "document is already queued or processing")
+        doc.status = "queued"
+        doc.stage = None
+        doc.error = None
+        doc.attempts = 0
+        doc.lease_until = None
+        doc.lease_token = None
+        doc.ontology_version = None
+        doc.updated_at = datetime.now(timezone.utc)
+        return document_data(doc)
+
+
+@app.get("/v1/ontology", tags=["Domain Ontology"])
+def domain_ontology():
+    return schema_card()
+
+
+@app.get("/v1/ontology/ttl", tags=["Domain Ontology"], responses={200: {"content": {"text/turtle": {"schema": {"type": "string"}}}}})
+def domain_ontology_ttl():
+    return Response(schema_turtle(), media_type="text/turtle")
+
+
+@app.get("/v1/knowledge-graph/summary", tags=["Domain Ontology"])
+def knowledge_graph_summary():
+    try:
+        return domain_summary()
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/v1/knowledge-graph/sparql", tags=["Domain Ontology"], openapi_extra={"requestBody": {"required": True, "content": {"application/sparql-query": {"schema": {"type": "string", "example": "PREFIX la: <https://mini-ontorag.vercel.app/ontology/legal-audit/v1/> SELECT ?s WHERE { ?s a la:Risk } LIMIT 20"}}}}})
+async def knowledge_graph_sparql(request: Request):
+    try:
+        return select_domain_query((await request.body()).decode("utf-8"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.post("/v1/documents/{document_id}/sparql", tags=["Knowledge Graph"], openapi_extra={"requestBody": {"required": True, "content": {"application/sparql-query": {"schema": {"type": "string", "example": "SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 20"}}}}})

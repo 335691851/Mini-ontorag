@@ -12,6 +12,10 @@
 | `GET /v1/documents` | 列出最近文档，`limit` 为 1–100 |
 | `GET /v1/documents/{id}` | 查询状态 |
 | `POST /v1/documents/{id}/retry` | 重新处理失败任务 |
+| `POST /v1/documents/{id}/reprocess` | 以当前领域本体重新抽取已完成或失败的文件 |
+| `GET /v1/ontology`、`GET /v1/ontology/ttl` | 获取版本化共享领域本体 JSON/Turtle |
+| `GET /v1/knowledge-graph/summary` | 跨文件知识图谱统计 |
+| `POST /v1/knowledge-graph/sparql` | 跨文件只读 SELECT 查询 |
 | `GET /v1/documents/{id}/graph` | 下载 RDF 实例图 |
 | `GET /v1/documents/{id}/schema` | 下载本体 RDF |
 | `POST /v1/documents/{id}/sparql` | 只读 SELECT 查询 |
@@ -37,7 +41,7 @@ curl -X POST "$BASE_URL/v1/documents" \
 响应头 `Location: /v1/documents/{id}` 指向状态接口，`Retry-After: 5` 给出建议的首次轮询间隔。
 
 ```json
-{"id":"6e4c10c2-4862-461c-9878-dac468bd840e","filename":"manual.pdf","sha256":"...","status":"queued","stage":null,"error":null,"attempts":0,"created_at":"2026-11-04T00:00:00+00:00","updated_at":"2026-11-04T00:00:00+00:00"}
+{"id":"6e4c10c2-4862-461c-9878-dac468bd840e","filename":"manual.pdf","sha256":"...","status":"queued","stage":null,"error":null,"attempts":0,"ontology_version":null,"created_at":"2026-11-04T00:00:00+00:00","updated_at":"2026-11-04T00:00:00+00:00"}
 ```
 
 业务系统保存 `id` 作为 `document_id`。同一幂等键和相同内容再次提交会返回原 `id` 及其当前状态；不同内容返回 `409`。幂等键限 1–128 个无空格的可打印 ASCII 字符。文件上限 4 MiB；支持 `.md`、`.txt`、`.html`、`.htm`、`.epub`、`.pdf`。
@@ -50,7 +54,18 @@ curl -X POST "$BASE_URL/v1/documents" \
 
 ## 获取图与查询
 
-`GET /v1/documents/{document_id}/graph` 返回实例图 Turtle RDF；`GET /v1/documents/{document_id}/schema` 返回抽取的本体 Turtle RDF。两者仅在 `completed` 后可用。
+`GET /v1/documents/{document_id}/graph` 返回该文件的实例与出处 Turtle RDF；`GET /v1/documents/{document_id}/schema` 返回抽取时使用的共享本体 Turtle RDF。两者仅在 `completed` 后可用。状态中的 `ontology_version=legal-audit-v1` 表示这份图已用当前共享本体重新抽取；旧图没有版本号，不会进入跨文件查询。调用 `POST /v1/documents/{document_id}/reprocess` 可从已保存的原文重新抽取，期间状态为 `queued` 或 `processing`。
+
+`GET /v1/ontology` 返回类、对象关系、数据属性、中文释义、版本与命名空间。此本体在所有文件间稳定复用；文档只提供实例事实和原文依据。`GET /v1/knowledge-graph/summary` 返回当前版本纳入的文档数、实体数和三元组数。跨文件 SELECT 示例：
+
+```bash
+curl -X POST "$BASE_URL/v1/knowledge-graph/sparql" \
+  -H "Authorization: Bearer $ONTORAG_SERVICE_API_KEY" \
+  -H "Content-Type: application/sparql-query" \
+  --data-binary 'PREFIX la: <https://mini-ontorag.vercel.app/ontology/legal-audit/v1/> SELECT ?entity ?name WHERE { ?entity a la:Role ; <http://www.w3.org/2000/01/rdf-schema#label> ?name } LIMIT 20'
+```
+
+当前跨文件查询最多聚合 100 份已完成且本体版本匹配的文件；超过上限接口返回错误，需要扩展查询存储方案。实体 IRI 仍按来源块生成，同名实体尚未自动合并，业务系统不能仅凭同名认定同一主体。
 
 `DELETE /v1/documents/{document_id}` 删除任务记录、原始文件与生成的图，成功返回 `204`。处理中的文档返回 `409`，请等任务完成或失败后重试。删除后同一 `document_id` 的查询返回 `404`。
 
@@ -80,7 +95,7 @@ Streamable HTTP MCP 端点为 `BASE_URL/mcp/`。请求头同样使用 Bearer 密
 }
 ```
 
-实际客户端配置格式可能不同，但 URL 与 Authorization 头保持一致。工具包括 `list_knowledge_documents`、`get_knowledge_document`、`sparql_select`、`describe_resource`。后两项必须传 `document_id`。例如 `sparql_select` 的参数：
+实际客户端配置格式可能不同，但 URL 与 Authorization 头保持一致。工具包括 `list_knowledge_documents`、`get_knowledge_document`、`get_domain_ontology`、`get_domain_graph_summary`、`sparql_select_domain`、`sparql_select`、`describe_resource`。单文件的 `sparql_select` 与 `describe_resource` 需要 `document_id`，`sparql_select_domain` 面向所有已纳入共享本体的文件，只传 `query`。例如：
 
 ```json
 {"document_id":"6e4c10c2-4862-461c-9878-dac468bd840e","query":"SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 20"}

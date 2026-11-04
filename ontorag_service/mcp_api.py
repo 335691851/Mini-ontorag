@@ -1,7 +1,8 @@
 from fastmcp import FastMCP
 
 from .db import get_document, document_data, list_documents
-from .graph import describe, select_query
+from .graph import describe, select_query, select_domain_query, domain_summary
+from .domain import schema_card
 
 mcp = FastMCP("OntoRAG Knowledge Graph")
 
@@ -31,3 +32,21 @@ def sparql_select(document_id: str, query: str) -> dict:
 def describe_resource(document_id: str, iri: str) -> list[dict]:
     """Return outgoing predicates and objects for an absolute resource IRI."""
     return describe(document_id, iri)
+
+
+@mcp.tool
+def get_domain_ontology() -> dict:
+    """Get the versioned legal and audit ontology shared by all documents."""
+    return schema_card()
+
+
+@mcp.tool
+def get_domain_graph_summary() -> dict:
+    """Count documents and entities in the shared domain graph."""
+    return domain_summary()
+
+
+@mcp.tool
+def sparql_select_domain(query: str) -> dict:
+    """Run a read-only SPARQL SELECT across all documents using the shared domain ontology."""
+    return select_domain_query(query)

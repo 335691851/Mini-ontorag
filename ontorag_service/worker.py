@@ -15,10 +15,9 @@ from rdflib import Graph
 
 from sqlalchemy import or_, select, update
 
-from .config import PUBLIC_BASE_IRI
 from .db import Document, Session, init_db
 from .storage import get_bytes, put_bytes
-from .ontology import valid_schema_turtle
+from .domain import ONTOLOGY_VERSION, schema_card, schema_turtle, validate_instance_graph
 
 
 def _api_client() -> tuple[str, dict[str, str]] | None:
@@ -42,7 +41,7 @@ def _remote_artifacts(base: str, headers: dict[str, str], document_id: str, toke
     with httpx.Client(timeout=120) as client, graph.open("rb") as graph_file, schema.open("rb") as schema_file:
         response = client.post(
             f"{base}/v1/internal/documents/{document_id}/artifacts",
-            headers={**headers, "X-Worker-Lease": token},
+            headers={**headers, "X-Worker-Lease": token, "X-Ontology-Version": ONTOLOGY_VERSION},
             files={"graph": ("world.ttl", graph_file, "text/turtle"), "schema": ("schema.ttl", schema_file, "text/turtle")},
         )
         response.raise_for_status()
@@ -66,7 +65,7 @@ def claim_job() -> tuple[str, str] | None:
         if not doc:
             return None
         doc.status = "processing"
-        doc.stage = "propose"
+        doc.stage = "ingest"
         doc.error = None
         doc.attempts += 1
         token = str(uuid4())
@@ -110,11 +109,11 @@ def _cli() -> str:
     raise RuntimeError("ontorag CLI is not installed")
 
 
-def _run_stage(cli: str, stage: str, root: Path) -> None:
+def _run_cli(cli: str, root: Path, *args: str) -> None:
     env = os.environ.copy()
     env["PATH"] = str(Path(cli).parent) + os.pathsep + env.get("PATH", "")
     result = subprocess.run(
-        [cli, "run-stage", stage, "--root", str(root)],
+        [cli, *args],
         cwd=root,
         env=env,
         text=True,
@@ -123,7 +122,7 @@ def _run_stage(cli: str, stage: str, root: Path) -> None:
         timeout=5400,
     )
     if result.returncode:
-        raise RuntimeError(f"OntoRAG {stage} failed: {result.stdout[-1800:]}")
+        raise RuntimeError(f"OntoRAG {' '.join(args[:1])} failed: {result.stdout[-1800:]}")
 
 
 def process_job(document_id: str, token: str, lost: Event) -> None:
@@ -139,36 +138,32 @@ def process_job(document_id: str, token: str, lost: Event) -> None:
         source = root / "content" / "sources" / filename
         source.parent.mkdir(parents=True)
         source.write_bytes(_remote_source(*remote, document_id, token) if remote else get_bytes(source_key))
-        manifest = {
-            "dataset": {
-                "slug": "d" + document_id.replace("-", ""),
-                "name": filename,
-                "base_iri": PUBLIC_BASE_IRI.rstrip("/") + "/" + document_id + "/",
-                "openrouter_model": os.getenv("OPENROUTER_MODEL", "deepseek-flash"),
-                "openrouter_base_url": os.getenv("OPENROUTER_BASE_URL", "https://api.deepseek.com"),
-            }
-        }
-        (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        ontology = root / "ontology"
+        ontology.mkdir()
+        card_path = ontology / "schema_card.json"
+        extraction_card = {**schema_card(), "aliases": []}
+        card_path.write_text(json.dumps(extraction_card, ensure_ascii=False), encoding="utf-8")
+        schema = ontology / "schema.ttl"
+        schema.write_bytes(schema_turtle())
         cli = _cli()
-        _run_stage(cli, "propose", root)
+        _run_cli(cli, root, "ingest", str(source), "--out", str(root / "dto"))
         if lost.is_set():
             raise RuntimeError("job lease was lost")
-        proposals = root / "ontology" / "proposals.raw.jsonl"
-        if not proposals.is_file() or not proposals.read_text(encoding="utf-8").strip():
-            raise RuntimeError("OntoRAG produced no schema proposal; check model credentials and response")
+        chunks = list((root / "dto" / "chunks").glob("*.jsonl"))
+        if len(chunks) != 1 or not chunks[0].read_text(encoding="utf-8").strip():
+            raise RuntimeError("OntoRAG did not produce one nonempty chunk file")
         set_stage(document_id, token, "extract")
-        _run_stage(cli, "extract", root)
+        graph = ontology / "world.ttl"
+        _run_cli(cli, root, "extract-instances", "--chunks", str(chunks[0]), "--schema-card", str(card_path), "--out-ttl", str(graph))
         if lost.is_set():
             raise RuntimeError("job lease was lost")
-        graph = root / "ontology" / "world.ttl"
-        schema = root / "ontology" / "schema.ttl"
         if not graph.is_file() or not schema.is_file():
             raise RuntimeError("OntoRAG did not produce schema.ttl and world.ttl")
         parsed = Graph()
         parsed.parse(graph, format="turtle")
         if len(parsed) == 0:
             raise RuntimeError("OntoRAG produced an empty instance graph")
-        schema.write_bytes(valid_schema_turtle(schema.read_bytes(), document_id))
+        validate_instance_graph(parsed)
         schema_graph = Graph()
         schema_graph.parse(schema, format="turtle")
         if len(schema_graph) == 0:
@@ -179,7 +174,7 @@ def process_job(document_id: str, token: str, lost: Event) -> None:
         graph_key = put_bytes(f"graphs/{document_id}/{token}/world.ttl", graph.read_bytes(), "text/turtle")
         schema_key = put_bytes(f"graphs/{document_id}/{token}/schema.ttl", schema.read_bytes(), "text/turtle")
     with Session.begin() as session:
-        changed = session.execute(update(Document).where(Document.id == document_id, Document.lease_token == token).values(graph_key=graph_key, schema_key=schema_key, status="completed", stage=None, error=None, lease_until=None, lease_token=None, updated_at=datetime.now(timezone.utc))).rowcount
+        changed = session.execute(update(Document).where(Document.id == document_id, Document.lease_token == token).values(graph_key=graph_key, schema_key=schema_key, ontology_version=ONTOLOGY_VERSION, status="completed", stage=None, error=None, lease_until=None, lease_token=None, updated_at=datetime.now(timezone.utc))).rowcount
         if changed != 1:
             raise RuntimeError("job lease was lost")
 

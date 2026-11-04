@@ -3,7 +3,6 @@
 import argparse
 import csv
 import json
-import re
 import html as html_module
 from collections import Counter
 from pathlib import Path
@@ -42,14 +41,14 @@ def document_data(doc: dict, graph_dir: Path) -> dict:
     graph_text = graph_path.read_text(encoding="utf-8")
     graph.parse(data=graph_text, format="turtle")
     schema.parse(graph_dir / f"{document_id}.schema.ttl", format="turtle")
-    namespace = re.search(r"<(https?://[^<>\s]+/" + re.escape(document_id) + r"/)", graph_text)
-    if not namespace:
-        raise ValueError(f"Missing document namespace in {graph_path}")
-    base = namespace.group(1)
+    classes = {subject for subject in schema.subjects(RDF.type, OWL.Class) if isinstance(subject, URIRef)}
+    if not classes:
+        raise ValueError(f"Missing ontology classes in {document_id}.schema.ttl")
+    base = str(next(iter(classes))).rsplit("/", 1)[0] + "/"
     entities = {
         subject for subject, _, kind in graph.triples((None, RDF.type, None))
         if isinstance(subject, URIRef) and isinstance(kind, URIRef)
-        and str(subject).startswith(base) and str(kind).startswith(base)
+        and kind in classes and str(subject).startswith(base)
     }
     nodes = []
     for entity in sorted(entities, key=str):
@@ -70,7 +69,6 @@ def document_data(doc: dict, graph_dir: Path) -> dict:
     ]
     edges.sort(key=lambda item: (item["source"], item["label"], item["target"]))
 
-    classes = {subject for subject in schema.subjects(RDF.type, OWL.Class) if isinstance(subject, URIRef)}
     schema_nodes = []
     for class_iri in sorted(classes, key=str):
         data_properties = [name(prop) for prop in schema.subjects(RDFS.domain, class_iri)
@@ -79,7 +77,8 @@ def document_data(doc: dict, graph_dir: Path) -> dict:
             "id": str(class_iri),
             "label": str(schema.value(class_iri, RDFS.label) or name(class_iri)),
             "type": "类",
-            "attributes": [{"name": "数据属性", "value": item} for item in sorted(set(data_properties))],
+            "attributes": ([{"name": "定义", "value": str(schema.value(class_iri, RDFS.comment))}] if schema.value(class_iri, RDFS.comment) else [])
+                + [{"name": "数据属性", "value": item} for item in sorted(set(data_properties))],
             "evidence": [],
         })
     schema_edges = []
@@ -89,6 +88,10 @@ def document_data(doc: dict, graph_dir: Path) -> dict:
         for domain in domains:
             for range_ in ranges:
                 schema_edges.append({"source": str(domain), "target": str(range_), "label": name(prop), "iri": str(prop)})
+    for child in classes:
+        for parent in schema.objects(child, RDFS.subClassOf):
+            if parent in classes:
+                schema_edges.append({"source": str(child), "target": str(parent), "label": "子类属于", "iri": str(RDFS.subClassOf)})
     schema_edges.sort(key=lambda item: (item["source"], item["label"], item["target"]))
 
     title = Path(doc["source"]).stem
@@ -113,10 +116,15 @@ def main() -> None:
     args = parser.parse_args()
     records = list(json.loads(args.manifest.read_text(encoding="utf-8")).values())
     docs = [document_data(record, args.graphs) for record in records]
+    if not docs:
+        raise ValueError("No documents found in import record")
+    domain = docs[0]["ontology"]
+    if any(doc["ontology"] != domain for doc in docs[1:]):
+        raise ValueError("Documents use different ontologies; reprocess and download all graphs first")
     totals = Counter()
     for doc in docs:
         totals.update(doc["counts"])
-    payload = json.dumps({"documents": docs, "totals": totals}, ensure_ascii=False, separators=(",", ":"))
+    payload = json.dumps({"documents": docs, "domain": domain, "totals": totals}, ensure_ascii=False, separators=(",", ":"))
     d3 = args.d3.read_text(encoding="utf-8")
     template = (Path(__file__).parent / "graph_viewer_template.html").read_text(encoding="utf-8")
     template = template.replace("__VIEWER_TITLE__", html_module.escape(args.title))

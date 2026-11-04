@@ -21,6 +21,7 @@ class Document(Base):
     source_key: Mapped[str] = mapped_column(Text)
     graph_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     schema_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ontology_version: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
     stage: Mapped[str | None] = mapped_column(String(24), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -53,6 +54,9 @@ def init_db() -> None:
         if "lease_token" not in columns:
             table = "ontorag.documents" if schema else "documents"
             connection.execute(text(f"ALTER TABLE {table} ADD COLUMN lease_token VARCHAR(36)"))
+        if "ontology_version" not in columns:
+            table = "ontorag.documents" if schema else "documents"
+            connection.execute(text(f"ALTER TABLE {table} ADD COLUMN ontology_version VARCHAR(64)"))
 
 
 def document_data(doc: Document) -> dict:
@@ -64,6 +68,7 @@ def document_data(doc: Document) -> dict:
         "stage": doc.stage,
         "error": doc.error,
         "attempts": doc.attempts,
+        "ontology_version": doc.ontology_version,
         "created_at": doc.created_at.isoformat() if doc.created_at else None,
         "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,
     }

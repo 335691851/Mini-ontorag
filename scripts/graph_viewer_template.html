@@ -61,8 +61,8 @@
 <body>
   <header><h1>__VIEWER_TITLE__</h1><div id="summary" class="sub"></div></header>
   <div class="toolbar">
-    <label>制度文件<select id="docSelect"></select></label>
-    <div class="buttons" role="group" aria-label="图谱视图"><button type="button" id="instancesBtn" class="active">实体关系</button><button type="button" id="ontologyBtn">单文件候选本体</button></div>
+    <label>查看范围<select id="docSelect"></select></label>
+    <div class="buttons" role="group" aria-label="图谱视图"><button type="button" id="instancesBtn">文件实例</button><button type="button" id="ontologyBtn" class="active">领域本体</button></div>
     <label>查找实体或类型<input id="search" type="search" placeholder="输入名称或关系"></label>
     <label class="check"><input id="isolated" type="checkbox">包含未连线节点</label>
     <label class="check"><input id="edgeNames" type="checkbox">显示关系名称</label>
@@ -77,16 +77,17 @@
   <script>
     const DATA = __GRAPH_DATA__;
     const $ = id => document.getElementById(id);
-    let docIndex = 0, mode = 'instances', selectedId = null, simulation = null, currentNodes = [], currentEdges = [], zoomBehavior = null;
+    let docIndex = -1, mode = 'ontology', selectedId = null, simulation = null, currentNodes = [], currentEdges = [], zoomBehavior = null;
     const safeText = value => String(value ?? '');
     const short = (value, max=14) => safeText(value).length > max ? safeText(value).slice(0,max) + '…' : safeText(value);
     const make = (tag, text, className) => { const node=document.createElement(tag); node.textContent=safeText(text); if(className) node.className=className; return node; };
-    const current = () => DATA.documents[docIndex];
-    const rawGraph = () => current()[mode];
+    const current = () => docIndex < 0 ? null : DATA.documents[docIndex];
+    const rawGraph = () => mode === 'ontology' ? DATA.domain : (current()?.instances || {nodes:[],edges:[]});
     function init() {
-      $('summary').textContent = `${DATA.documents.length} 份制度 · ${DATA.totals.entities} 个实体 · ${DATA.totals.relations} 条实例关系；当前按文件独立抽取，尚未建立跨文件共享领域本体`;
+      $('summary').textContent = `${DATA.documents.length} 份制度共用 1 套领域本体 · ${DATA.domain.nodes.length} 个类 · ${DATA.domain.edges.length} 种对象关系 · ${DATA.totals.entities} 个文件实例`;
+      const all=document.createElement('option'); all.value=-1; all.textContent='全部制度 · 共享领域本体'; $('docSelect').appendChild(all);
       DATA.documents.forEach((doc,index) => { const option=document.createElement('option'); option.value=index; option.textContent=`${doc.folder} · ${doc.title}`; $('docSelect').appendChild(option); });
-      $('docSelect').addEventListener('change', event => { docIndex=Number(event.target.value); selectedId=null; $('search').value=''; render(); });
+      $('docSelect').addEventListener('change', event => { docIndex=Number(event.target.value); if(docIndex < 0) mode='ontology'; selectedId=null; $('search').value='';syncButtons();render(); });
       $('instancesBtn').addEventListener('click', () => setMode('instances'));
       $('ontologyBtn').addEventListener('click', () => setMode('ontology'));
       $('isolated').addEventListener('change', render);
@@ -96,11 +97,12 @@
       render();
     }
     function setMode(next) {
+      if(next==='instances' && docIndex<0){ docIndex=0; $('docSelect').value='0'; }
       mode=next; selectedId=null; $('search').value='';
-      $('instancesBtn').classList.toggle('active',next==='instances');
-      $('ontologyBtn').classList.toggle('active',next==='ontology');
+      syncButtons();
       render();
     }
+    function syncButtons(){ $('instancesBtn').classList.toggle('active',mode==='instances'); $('ontologyBtn').classList.toggle('active',mode==='ontology'); }
     function metric(label,value) { const box=make('div','', 'metric'); box.append(make('b',value),make('span',label)); return box; }
     function render() {
       if (simulation) simulation.stop();
@@ -109,11 +111,11 @@
       currentNodes=raw.nodes.filter(node=>includeIsolated || touched.has(node.id)).map(node=>({...node}));
       const ids=new Set(currentNodes.map(node=>node.id));
       currentEdges=raw.edges.filter(edge=>ids.has(edge.source)&&ids.has(edge.target)).map(edge=>({...edge}));
-      $('documentInfo').textContent=`${doc.folder} · ${doc.title}`;
+      $('documentInfo').textContent=doc ? `${doc.folder} · ${doc.title}` : '所有文件使用同一组类与关系';
       $('metrics').replaceChildren(metric(mode==='instances'?'实体总数':'类总数',raw.nodes.length),metric('关系总数',raw.edges.length));
       $('listTitle').textContent=mode==='instances'?'实体':'本体类';
       updateList();
-      if(!selectedId) $('detail').replaceChildren(make('div',mode==='instances'?'点击实体或连线，查看属性、关系表达和原文依据。':'这是当前文件的候选类和关系，尚未与其他文件对齐。点击节点查看定义。','empty'));
+      if(!selectedId) $('detail').replaceChildren(make('div',mode==='instances'?'点击实体或连线，查看属性、关系表达和原文依据。':'这是全部文件共用的法务与审计领域本体。点击类查看定义和关系。','empty'));
       draw();
     }
     function updateList() {
