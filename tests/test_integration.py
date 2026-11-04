@@ -8,6 +8,19 @@ from fastapi.testclient import TestClient
 
 
 class IntegrationTest(unittest.TestCase):
+    def test_numeric_ontorag_schema_prefix_is_repaired(self):
+        from rdflib import Graph
+        from ontorag_service.ontology import valid_schema_turtle
+
+        document_id = "8063712e-c264-58c7-a118-7886532ad044"
+        slug = document_id.replace("-", "")
+        bad = f"@prefix {slug}: <https://example.org/> .\n{slug}:Rule a <http://www.w3.org/2000/01/rdf-schema#Class> .".encode()
+        fixed = valid_schema_turtle(bad, document_id)
+        self.assertIn(f"@prefix d{slug}:".encode(), fixed)
+        graph = Graph()
+        graph.parse(data=fixed.decode(), format="turtle")
+        self.assertEqual(len(graph), 1)
+
     def test_upload_worker_query_and_mcp(self):
         with tempfile.TemporaryDirectory() as temp:
             os.environ["DATABASE_URL"] = f"sqlite:///{Path(temp) / 'test.db'}"

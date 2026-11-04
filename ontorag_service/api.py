@@ -16,6 +16,7 @@ from .db import Document, Session, document_data, get_document, init_db, list_do
 from .graph import describe, select_query
 from .storage import delete_bytes, get_bytes, put_bytes
 from .mcp_api import mcp
+from .ontology import valid_schema_turtle
 
 ALLOWED = {".md", ".txt", ".html", ".htm", ".epub", ".pdf"}
 logger = logging.getLogger(__name__)
@@ -161,7 +162,7 @@ async def worker_artifacts(
 ):
     _active_worker_document(document_id, x_worker_lease)
     graph_data = await graph.read(MAX_UPLOAD_BYTES + 1)
-    schema_data = await schema_file.read(MAX_UPLOAD_BYTES + 1)
+    schema_data = valid_schema_turtle(await schema_file.read(MAX_UPLOAD_BYTES + 1), document_id)
     if not graph_data or not schema_data or len(graph_data) + len(schema_data) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "graph and schema must be nonempty and at most MAX_UPLOAD_BYTES combined")
     graph_key = schema_key = None
@@ -219,7 +220,7 @@ def schema(document_id: str):
         raise HTTPException(404, "document not found")
     if doc.status != "completed" or not doc.schema_key:
         raise HTTPException(409, "schema is not ready")
-    return Response(get_bytes(doc.schema_key), media_type="text/turtle")
+    return Response(valid_schema_turtle(get_bytes(doc.schema_key), document_id), media_type="text/turtle")
 
 
 @app.post("/v1/documents/{document_id}/retry", status_code=202, response_model=DocumentOut, tags=["Documents"])

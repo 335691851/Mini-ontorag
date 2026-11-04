@@ -18,6 +18,7 @@ from sqlalchemy import or_, select, update
 from .config import PUBLIC_BASE_IRI
 from .db import Document, Session, init_db
 from .storage import get_bytes, put_bytes
+from .ontology import valid_schema_turtle
 
 
 def _api_client() -> tuple[str, dict[str, str]] | None:
@@ -140,7 +141,7 @@ def process_job(document_id: str, token: str, lost: Event) -> None:
         source.write_bytes(_remote_source(*remote, document_id, token) if remote else get_bytes(source_key))
         manifest = {
             "dataset": {
-                "slug": document_id.replace("-", ""),
+                "slug": "d" + document_id.replace("-", ""),
                 "name": filename,
                 "base_iri": PUBLIC_BASE_IRI.rstrip("/") + "/" + document_id + "/",
                 "openrouter_model": os.getenv("OPENROUTER_MODEL", "deepseek-flash"),
@@ -167,6 +168,11 @@ def process_job(document_id: str, token: str, lost: Event) -> None:
         parsed.parse(graph, format="turtle")
         if len(parsed) == 0:
             raise RuntimeError("OntoRAG produced an empty instance graph")
+        schema.write_bytes(valid_schema_turtle(schema.read_bytes(), document_id))
+        schema_graph = Graph()
+        schema_graph.parse(schema, format="turtle")
+        if len(schema_graph) == 0:
+            raise RuntimeError("OntoRAG produced an empty schema graph")
         if remote:
             _remote_artifacts(*remote, document_id, token, graph, schema)
             return

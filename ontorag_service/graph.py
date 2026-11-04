@@ -5,6 +5,7 @@ from rdflib import Graph, URIRef
 
 from .db import get_document
 from .storage import get_bytes
+from .ontology import valid_schema_turtle
 
 
 def graph_for(document_id: str) -> Graph:
@@ -15,7 +16,7 @@ def graph_for(document_id: str) -> Graph:
         raise FileNotFoundError("document graph is not ready")
     graph = Graph()
     if doc.schema_key:
-        graph.parse(data=get_bytes(doc.schema_key).decode("utf-8"), format="turtle")
+        graph.parse(data=valid_schema_turtle(get_bytes(doc.schema_key), document_id).decode("utf-8"), format="turtle")
     graph.parse(data=get_bytes(doc.graph_key).decode("utf-8"), format="turtle")
     return graph
 
