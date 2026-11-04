@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import httpx
 from threading import Event, Thread
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17,6 +18,33 @@ from sqlalchemy import or_, select, update
 from .config import PUBLIC_BASE_IRI
 from .db import Document, Session, init_db
 from .storage import get_bytes, put_bytes
+
+
+def _api_client() -> tuple[str, dict[str, str]] | None:
+    base = os.getenv("ONTORAG_API_BASE_URL", "").rstrip("/")
+    if not base:
+        return None
+    key = os.getenv("ONTORAG_SERVICE_API_KEY", "")
+    if not key:
+        raise RuntimeError("ONTORAG_SERVICE_API_KEY is required for worker API storage")
+    return base, {"Authorization": f"Bearer {key}"}
+
+
+def _remote_source(base: str, headers: dict[str, str], document_id: str, token: str) -> bytes:
+    with httpx.Client(timeout=90) as client:
+        response = client.get(f"{base}/v1/internal/documents/{document_id}/source", headers={**headers, "X-Worker-Lease": token})
+        response.raise_for_status()
+        return response.content
+
+
+def _remote_artifacts(base: str, headers: dict[str, str], document_id: str, token: str, graph: Path, schema: Path) -> None:
+    with httpx.Client(timeout=120) as client, graph.open("rb") as graph_file, schema.open("rb") as schema_file:
+        response = client.post(
+            f"{base}/v1/internal/documents/{document_id}/artifacts",
+            headers={**headers, "X-Worker-Lease": token},
+            files={"graph": ("world.ttl", graph_file, "text/turtle"), "schema": ("schema.ttl", schema_file, "text/turtle")},
+        )
+        response.raise_for_status()
 
 
 def claim_job() -> tuple[str, str] | None:
@@ -104,11 +132,12 @@ def process_job(document_id: str, token: str, lost: Event) -> None:
     with Session() as session:
         doc = session.get(Document, document_id)
         filename, source_key = doc.filename, doc.source_key
+    remote = _api_client()
     with tempfile.TemporaryDirectory(prefix="ontorag-") as temp:
         root = Path(temp)
         source = root / "content" / "sources" / filename
         source.parent.mkdir(parents=True)
-        source.write_bytes(get_bytes(source_key))
+        source.write_bytes(_remote_source(*remote, document_id, token) if remote else get_bytes(source_key))
         manifest = {
             "dataset": {
                 "slug": document_id.replace("-", ""),
@@ -138,6 +167,9 @@ def process_job(document_id: str, token: str, lost: Event) -> None:
         parsed.parse(graph, format="turtle")
         if len(parsed) == 0:
             raise RuntimeError("OntoRAG produced an empty instance graph")
+        if remote:
+            _remote_artifacts(*remote, document_id, token, graph, schema)
+            return
         graph_key = put_bytes(f"graphs/{document_id}/{token}/world.ttl", graph.read_bytes(), "text/turtle")
         schema_key = put_bytes(f"graphs/{document_id}/{token}/schema.ttl", schema.read_bytes(), "text/turtle")
     with Session.begin() as session:

@@ -61,6 +61,22 @@ class IntegrationTest(unittest.TestCase):
                 self.assertEqual(call.status_code, 200)
                 self.assertIn("alice", call.text)
                 self.assertEqual(client.post("/mcp/", json={"jsonrpc": "2.0", "id": 4, "method": "tools/list", "params": {}}).status_code, 401)
+                internal = client.post("/v1/documents", headers=headers, files={"file": ("internal.md", b"Worker source", "text/markdown")}).json()["id"]
+                claimed_id, internal_token = worker.claim_job()
+                self.assertEqual(claimed_id, internal)
+                source_url = f"/v1/internal/documents/{internal}/source"
+                artifact_url = f"/v1/internal/documents/{internal}/artifacts"
+                self.assertEqual(client.get(source_url, headers=headers).status_code, 409)
+                internal_headers = {**headers, "X-Worker-Lease": internal_token}
+                self.assertEqual(client.get(source_url, headers=internal_headers).content, b"Worker source")
+                self.assertEqual(client.post(artifact_url, headers=headers, files={}).status_code, 422)
+                artifacts = client.post(artifact_url, headers=internal_headers, files={
+                    "graph": ("world.ttl", b"@prefix ex: <https://example.org/> . ex:bob a ex:Thing .", "text/turtle"),
+                    "schema": ("schema.ttl", b"@prefix ex: <https://example.org/> . ex:Thing a <http://www.w3.org/2000/01/rdf-schema#Class> .", "text/turtle"),
+                })
+                self.assertEqual(artifacts.status_code, 200)
+                self.assertEqual(client.get(f"/v1/documents/{internal}", headers=headers).json()["status"], "completed")
+                self.assertEqual(client.get(source_url, headers=internal_headers).status_code, 409)
                 self.assertEqual(client.delete(f"/v1/documents/{doc_id}", headers=headers).status_code, 204)
                 self.assertEqual(client.get(f"/v1/documents/{doc_id}", headers=headers).status_code, 404)
                 another = client.post("/v1/documents", headers=headers, files={"file": ("lease.md", b"Lease test.", "text/markdown")}).json()["id"]

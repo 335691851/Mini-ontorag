@@ -139,6 +139,56 @@ def document(document_id: str):
     return document_data(doc)
 
 
+def _active_worker_document(document_id: str, token: str | None) -> Document:
+    doc = get_document(document_id)
+    if not doc or not token or not doc.lease_token or not hmac.compare_digest(doc.lease_token, token) or doc.status != "processing":
+        raise HTTPException(409, "worker lease is not active")
+    return doc
+
+
+@app.get("/v1/internal/documents/{document_id}/source", include_in_schema=False)
+def worker_source(document_id: str, x_worker_lease: str | None = Header(default=None)):
+    doc = _active_worker_document(document_id, x_worker_lease)
+    return Response(get_bytes(doc.source_key), media_type=doc.content_type)
+
+
+@app.post("/v1/internal/documents/{document_id}/artifacts", include_in_schema=False)
+async def worker_artifacts(
+    document_id: str,
+    graph: UploadFile = File(...),
+    schema_file: UploadFile = File(..., alias="schema"),
+    x_worker_lease: str | None = Header(default=None),
+):
+    _active_worker_document(document_id, x_worker_lease)
+    graph_data = await graph.read(MAX_UPLOAD_BYTES + 1)
+    schema_data = await schema_file.read(MAX_UPLOAD_BYTES + 1)
+    if not graph_data or not schema_data or len(graph_data) + len(schema_data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "graph and schema must be nonempty and at most MAX_UPLOAD_BYTES combined")
+    graph_key = schema_key = None
+    try:
+        graph_key = put_bytes(f"graphs/{document_id}/{x_worker_lease}/world.ttl", graph_data, "text/turtle")
+        schema_key = put_bytes(f"graphs/{document_id}/{x_worker_lease}/schema.ttl", schema_data, "text/turtle")
+        with Session.begin() as session:
+            doc = session.scalars(select(Document).where(Document.id == document_id).with_for_update()).first()
+            if not doc or doc.status != "processing" or doc.lease_token != x_worker_lease:
+                raise HTTPException(409, "worker lease is not active")
+            doc.graph_key = graph_key
+            doc.schema_key = schema_key
+            doc.status = "completed"
+            doc.stage = None
+            doc.error = None
+            doc.lease_until = None
+            doc.lease_token = None
+            doc.updated_at = datetime.now(timezone.utc)
+    except Exception:
+        try:
+            delete_bytes([key for key in (graph_key, schema_key) if key])
+        except Exception:
+            logger.exception("Could not clean up worker artifacts after a failed commit")
+        raise
+    return {"id": document_id, "status": "completed"}
+
+
 @app.delete("/v1/documents/{document_id}", status_code=204, tags=["Documents"])
 def delete_document(document_id: str):
     with Session.begin() as session:

@@ -36,6 +36,7 @@ notepad .env
 | `OPENROUTER_BASE_URL` | `https://api.deepseek.com` |
 | `OPENROUTER_MODEL` | `deepseek-flash` |
 | `STORAGE_BACKEND` | `blob` |
+| `ONTORAG_API_BASE_URL` | Production API URL for daemon Blob access, e.g. `https://mini-ontorag.vercel.app` |
 | `ONTORAG_BASE_IRI` | 生成图所用的稳定命名空间，例如 `https://your-domain.example/kg/` |
 
 同一密钥用于全部文档。不要提交 `.env`。`vercel.json` 默认将 worker 放在 `iad1`；数据库与 Blob 尽量选邻近区域。部署后先检查 `/health`，再按 [对接说明](docs/INTEGRATION.md) 上传测试文档并轮询状态。真实 DeepSeek 抽取需要有效密钥、余额和网络连接，目前未使用真实密钥验证。
