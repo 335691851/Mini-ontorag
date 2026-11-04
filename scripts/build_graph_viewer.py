@@ -106,6 +106,25 @@ def document_data(doc: dict, graph_dir: Path) -> dict:
     }
 
 
+def combined_instances(docs: list[dict]) -> dict:
+    nodes = {}
+    edges = {}
+    for doc in docs:
+        for node in doc["instances"]["nodes"]:
+            if node["id"] not in nodes:
+                nodes[node["id"]] = {**node, "documents": [doc["title"]]}
+            else:
+                existing = nodes[node["id"]]
+                if doc["title"] not in existing["documents"]:
+                    existing["documents"].append(doc["title"])
+                for evidence in node["evidence"]:
+                    if evidence not in existing["evidence"]:
+                        existing["evidence"].append(evidence)
+        for edge in doc["instances"]["edges"]:
+            edges[(edge["source"], edge["iri"], edge["target"])] = edge
+    return {"nodes": list(nodes.values()), "edges": list(edges.values())}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, required=True)
@@ -124,7 +143,7 @@ def main() -> None:
     totals = Counter()
     for doc in docs:
         totals.update(doc["counts"])
-    payload = json.dumps({"documents": docs, "domain": domain, "totals": totals}, ensure_ascii=False, separators=(",", ":"))
+    payload = json.dumps({"documents": docs, "domain": domain, "allInstances": combined_instances(docs), "totals": totals}, ensure_ascii=False, separators=(",", ":"))
     d3 = args.d3.read_text(encoding="utf-8")
     template = (Path(__file__).parent / "graph_viewer_template.html").read_text(encoding="utf-8")
     template = template.replace("__VIEWER_TITLE__", html_module.escape(args.title))

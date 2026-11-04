@@ -2,8 +2,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from rdflib import Graph
+
 from ontorag_service.domain import schema_card, schema_turtle
-from scripts.build_graph_viewer import document_data
+from scripts.build_graph_viewer import combined_instances, document_data
+from scripts.export_domain_graph import export
 
 
 class ViewerTest(unittest.TestCase):
@@ -24,6 +27,14 @@ class ViewerTest(unittest.TestCase):
             self.assertEqual(len(views[0]["ontology"]["nodes"]), 35)
             self.assertEqual(len(views[0]["instances"]["nodes"]), 1)
             self.assertEqual(len(views[1]["instances"]["nodes"]), 1)
+            combined = combined_instances(views)
+            self.assertEqual(len(combined["nodes"]), 2)
+            manifest = root / "manifest.json"
+            manifest.write_text('{"one":{"id":"document-1","source":"sample-1.pdf"},"two":{"id":"document-2","source":"sample-2.pdf"}}', encoding="utf-8")
+            result = export(manifest, root, root / "export")
+            self.assertEqual(result["documents"], 2)
+            self.assertEqual(result["entities"], 2)
+            self.assertEqual(len(Graph().parse(root / "export" / "领域知识图谱-全集.ttl", format="turtle")), result["triples"])
 
 
 if __name__ == "__main__":

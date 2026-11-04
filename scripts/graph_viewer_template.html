@@ -62,9 +62,9 @@
   <header><h1>__VIEWER_TITLE__</h1><div id="summary" class="sub"></div></header>
   <div class="toolbar">
     <label>查看范围<select id="docSelect"></select></label>
-    <div class="buttons" role="group" aria-label="图谱视图"><button type="button" id="instancesBtn">文件实例</button><button type="button" id="ontologyBtn" class="active">领域本体</button></div>
+    <div class="buttons" role="group" aria-label="图谱视图"><button type="button" id="instancesBtn">实体关系</button><button type="button" id="ontologyBtn" class="active">领域本体</button></div>
     <label>查找实体或类型<input id="search" type="search" placeholder="输入名称或关系"></label>
-    <label class="check"><input id="isolated" type="checkbox">包含未连线节点</label>
+    <label class="check"><input id="isolated" type="checkbox" checked>包含未连线节点</label>
     <label class="check"><input id="edgeNames" type="checkbox">显示关系名称</label>
     <button type="button" id="reset">重置视图</button>
   </div>
@@ -82,12 +82,12 @@
     const short = (value, max=14) => safeText(value).length > max ? safeText(value).slice(0,max) + '…' : safeText(value);
     const make = (tag, text, className) => { const node=document.createElement(tag); node.textContent=safeText(text); if(className) node.className=className; return node; };
     const current = () => docIndex < 0 ? null : DATA.documents[docIndex];
-    const rawGraph = () => mode === 'ontology' ? DATA.domain : (current()?.instances || {nodes:[],edges:[]});
+    const rawGraph = () => mode === 'ontology' ? DATA.domain : (current()?.instances || DATA.allInstances);
     function init() {
       $('summary').textContent = `${DATA.documents.length} 份制度共用 1 套领域本体 · ${DATA.domain.nodes.length} 个类 · ${DATA.domain.edges.length} 种对象关系 · ${DATA.totals.entities} 个文件实例`;
-      const all=document.createElement('option'); all.value=-1; all.textContent='全部制度 · 共享领域本体'; $('docSelect').appendChild(all);
+      const all=document.createElement('option'); all.value=-1; all.textContent='全部制度 · 全域图谱'; $('docSelect').appendChild(all);
       DATA.documents.forEach((doc,index) => { const option=document.createElement('option'); option.value=index; option.textContent=`${doc.folder} · ${doc.title}`; $('docSelect').appendChild(option); });
-      $('docSelect').addEventListener('change', event => { docIndex=Number(event.target.value); if(docIndex < 0) mode='ontology'; selectedId=null; $('search').value='';syncButtons();render(); });
+      $('docSelect').addEventListener('change', event => { docIndex=Number(event.target.value); selectedId=null; $('search').value='';syncButtons();render(); });
       $('instancesBtn').addEventListener('click', () => setMode('instances'));
       $('ontologyBtn').addEventListener('click', () => setMode('ontology'));
       $('isolated').addEventListener('change', render);
@@ -97,7 +97,6 @@
       render();
     }
     function setMode(next) {
-      if(next==='instances' && docIndex<0){ docIndex=0; $('docSelect').value='0'; }
       mode=next; selectedId=null; $('search').value='';
       syncButtons();
       render();
@@ -111,7 +110,7 @@
       currentNodes=raw.nodes.filter(node=>includeIsolated || touched.has(node.id)).map(node=>({...node}));
       const ids=new Set(currentNodes.map(node=>node.id));
       currentEdges=raw.edges.filter(edge=>ids.has(edge.source)&&ids.has(edge.target)).map(edge=>({...edge}));
-      $('documentInfo').textContent=doc ? `${doc.folder} · ${doc.title}` : '所有文件使用同一组类与关系';
+      $('documentInfo').textContent=doc ? `${doc.folder} · ${doc.title}` : (mode==='ontology'?'所有文件使用同一组类与关系':'全部文件的实体与关系；点击节点查看出处');
       $('metrics').replaceChildren(metric(mode==='instances'?'实体总数':'类总数',raw.nodes.length),metric('关系总数',raw.edges.length));
       $('listTitle').textContent=mode==='instances'?'实体':'本体类';
       updateList();
@@ -120,7 +119,7 @@
     }
     function updateList() {
       const list=$('nodeList'), search=$('search').value.trim().toLowerCase();
-      const degree=new Map(); currentEdges.forEach(edge=>{degree.set(edge.source,(degree.get(edge.source)||0)+1);degree.set(edge.target,(degree.get(edge.target)||0)+1);});
+      const degree=new Map(); currentEdges.forEach(edge=>{const source=edge.source.id||edge.source,target=edge.target.id||edge.target;degree.set(source,(degree.get(source)||0)+1);degree.set(target,(degree.get(target)||0)+1);});
       const matches=rawGraph().nodes.filter(node=>!search || `${node.label} ${node.type}`.toLowerCase().includes(search))
         .sort((a,b)=>(degree.get(b.id)||0)-(degree.get(a.id)||0)||a.label.localeCompare(b.label,'zh-CN'));
       $('listCount').textContent=`${matches.length} 个匹配节点${matches.length>80?'，显示前 80 个':''}`;
@@ -142,7 +141,7 @@
       const edgeLabels=layer.append('g').selectAll('text').data(currentEdges).join('text').attr('class','edge-label').text(edge=>short(edge.label,18)).style('display',$('edgeNames').checked?null:'none');
       const nodes=layer.append('g').selectAll('g').data(currentNodes).join('g').attr('class',mode==='ontology'?'node ontology':'node').on('click',(event,node)=>{event.stopPropagation();selectNode(node.id,false);});
       nodes.append('circle').attr('r',node=>Math.min(15,7+Math.sqrt(currentEdges.filter(edge=>edge.source===node.id||edge.target===node.id).length)*2));
-      nodes.append('text').attr('x',12).attr('y',4).text(node=>short(node.label,12));
+      nodes.append('text').attr('x',12).attr('y',4).text(node=>docIndex<0&&mode==='instances'?'':short(node.label,12));
       nodes.append('title').text(node=>`${node.label} · ${node.type}`);
       const drag=d3.drag().on('start',(event,node)=>{if(!event.active)simulation.alphaTarget(.3).restart();node.fx=node.x;node.fy=node.y;}).on('drag',(event,node)=>{node.fx=event.x;node.fy=event.y;}).on('end',(event,node)=>{if(!event.active)simulation.alphaTarget(0);node.fx=null;node.fy=null;});nodes.call(drag);
       simulation=d3.forceSimulation(currentNodes).force('link',d3.forceLink(currentEdges).id(node=>node.id).distance(mode==='ontology'?120:100).strength(.35)).force('charge',d3.forceManyBody().strength(-240)).force('center',d3.forceCenter(width/2,height/2)).force('collision',d3.forceCollide(26)).on('tick',()=>{
@@ -162,6 +161,7 @@
       if(!related.length)detail.append(make('div','无已抽取的对象关系','empty'));
       for(const edge of related.slice(0,80)) { const otherId=edge.source===id?edge.target:edge.source;const other=rawGraph().nodes.find(item=>item.id===otherId);detail.append(make('div',`${edge.source===id?'→':'←'} ${edge.label} · ${other?.label||short(otherId,30)}`,'field')); }
       detail.append(make('div',mode==='ontology'?'数据属性':'属性与表达','section-title'));
+      if(node.documents?.length)detail.append(make('div',`来源文件：${node.documents.join('；')}`,'field'));
       if(!node.attributes.length)detail.append(make('div','无属性值','empty'));
       for(const attribute of node.attributes) {const row=make('div','', 'field');row.append(make('b',attribute.name+'：'),document.createTextNode(attribute.value));detail.append(row);}
       if(node.evidence.length){detail.append(make('div',`原文依据（${node.evidence.length}）`,'section-title'));for(const quote of node.evidence)detail.append(make('div',quote,'quote'));}

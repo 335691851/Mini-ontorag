@@ -44,7 +44,7 @@ notepad .env
 
 ## 查看知识图谱
 
-在线接口 `GET /v1/ontology/ttl` 返回共用本体；`GET /v1/documents/{id}/graph` 返回每份文件的事实与出处，均需 Bearer 密钥。`GET /v1/knowledge-graph/summary` 和 `POST /v1/knowledge-graph/sparql` 查询整个领域知识图谱。离线查看器由 `scripts/build_graph_viewer.py` 从下载的 Turtle 文件生成，默认显示整个领域本体，并允许切换到单份文件的实例和原文依据。重新抽取后应重新下载全部图再生成查看器。
+在线接口 `GET /v1/ontology/ttl` 返回共用本体；`GET /v1/documents/{id}/graph` 返回每份文件的事实与出处，均需 Bearer 密钥。`GET /v1/knowledge-graph/summary` 和 `POST /v1/knowledge-graph/sparql` 查询整个领域知识图谱。离线查看器由 `scripts/build_graph_viewer.py` 从下载的 Turtle 文件生成，默认显示整个领域本体；在“全部制度”范围可切换到全域实体关系，也可选择单份文件查看实例和原文依据。重新抽取后应重新下载全部图再生成查看器。
 
 ```powershell
 $viewer = 'C:\path\to\知识图谱查看' # 改为本机实际目录
@@ -52,6 +52,12 @@ $viewer = 'C:\path\to\知识图谱查看' # 改为本机实际目录
 ```
 
 生成的 `文档索引.csv` 列出每份制度的 `document_id`、实体和关系数量。所有输入图必须使用同一个本体版本，脚本会检查并拒绝混用。图谱内容由模型自动抽取，正式使用前应核对关键实体、关系与原文依据。
+
+可另行导出整个知识图谱的 Turtle RDF，以及实体、关系 CSV：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.export_domain_graph --manifest (Join-Path $viewer '导入记录.json') --graphs (Join-Path $viewer 'rdf_domain') --output-dir $viewer
+```
 
 ## 当前范围
 
