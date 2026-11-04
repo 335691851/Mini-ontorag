@@ -44,7 +44,7 @@ notepad .env
 
 ## 查看知识图谱
 
-在线接口 `GET /v1/documents/{id}/graph` 与 `/schema` 返回 Turtle RDF，需要 Bearer 密钥。要在本地查看实体、关系、属性表达和原文引用，可用 `scripts/build_graph_viewer.py` 从下载的 Turtle 文件生成离线 HTML。脚本需要每份文档的 `{document_id}.graph.ttl`、`{document_id}.schema.ttl`，以及包含 `id`、`source` 的导入记录 JSON。D3 7.9.0 的 `d3.min.js` 会被内嵌到生成的 HTML 中，打开 HTML 时不需要联网或输入服务密钥。
+在线接口 `GET /v1/documents/{id}/graph` 与 `/schema` 返回 Turtle RDF，需要 Bearer 密钥。要在本地查看实体、关系、属性表达和原文引用，可用 `scripts/build_graph_viewer.py` 从下载的 Turtle 文件生成离线 HTML。脚本需要每份文档的 `{document_id}.graph.ttl`、`{document_id}.schema.ttl`，以及包含 `id`、`source` 的导入记录 JSON。D3 7.9.0 的 `d3.min.js` 会被内嵌到生成的 HTML 中，打开 HTML 时不需要联网或输入服务密钥。查看器展示的是单文件候选本体和实例图；跨文件共享领域本体、概念对齐与联合查询尚未实现。
 
 ```powershell
 $viewer = 'C:\path\to\知识图谱查看' # 改为本机实际目录
