@@ -48,10 +48,10 @@ notepad .env
 
 ```powershell
 $viewer = 'C:\path\to\知识图谱查看' # 改为本机实际目录
-.\.venv\Scripts\python.exe scripts\build_graph_viewer.py --manifest (Join-Path $viewer '导入记录.json') --graphs (Join-Path $viewer 'rdf') --d3 (Join-Path $viewer 'assets\d3.min.js') --output (Join-Path $viewer '知识图谱.html')
+.\.venv\Scripts\python.exe scripts\build_graph_viewer.py --manifest (Join-Path $viewer '导入记录.json') --graphs (Join-Path $viewer 'rdf_domain') --d3 (Join-Path $viewer 'assets\d3.min.js') --output (Join-Path $viewer '领域知识图谱.html')
 ```
 
-生成的 `文档索引.csv` 列出每份制度的 `document_id`、实体和关系数量。图谱内容由模型自动抽取，正式使用前应核对关键实体、关系与原文依据。
+生成的 `文档索引.csv` 列出每份制度的 `document_id`、实体和关系数量。所有输入图必须使用同一个本体版本，脚本会检查并拒绝混用。图谱内容由模型自动抽取，正式使用前应核对关键实体、关系与原文依据。
 
 ## 当前范围
 

@@ -52,13 +52,13 @@ def document_data(doc: dict, graph_dir: Path) -> dict:
     }
     nodes = []
     for entity in sorted(entities, key=str):
-        classes = sorted({name(kind) for kind in graph.objects(entity, RDF.type) if str(kind).startswith(base)})
+        entity_classes = sorted({name(kind) for kind in graph.objects(entity, RDF.type) if str(kind).startswith(base)})
         attrs = [{"name": name(predicate), "value": str(value)} for predicate, value in graph.predicate_objects(entity)
                  if predicate != RDFS.label and str(predicate).startswith(base) and not isinstance(value, URIRef)]
         nodes.append({
             "id": str(entity),
             "label": str(graph.value(entity, RDFS.label) or name(entity)),
-            "type": classes[0] if classes else "实体",
+            "type": entity_classes[0] if entity_classes else "实体",
             "attributes": attrs,
             "evidence": quoted_evidence(graph, entity),
         })
@@ -139,7 +139,7 @@ def main() -> None:
             counts = doc["counts"]
             writer.writerow([doc["folder"], doc["title"], doc["id"], counts["entities"], counts["relations"], counts["classes"], counts["schemaRelations"]])
     print(f"Wrote {args.output} ({args.output.stat().st_size:,} bytes)")
-    print(f"Documents: {len(docs)}; entities: {totals['entities']}; relations: {totals['relations']}; classes: {totals['classes']}")
+    print(f"Documents: {len(docs)}; entities: {totals['entities']}; relations: {totals['relations']}; shared classes: {len(domain['nodes'])}")
 
 
 if __name__ == "__main__":
