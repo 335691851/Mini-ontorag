@@ -31,7 +31,7 @@ notepad .env
 | --- | --- |
 | `DATABASE_URL` | Postgres 连接串，API 和 worker 共用 |
 | `BLOB_READ_WRITE_TOKEN` | 私有 Blob 存储访问令牌 |
-| `ONTORAG_SERVICE_API_KEY` | 外部系统调用 REST/MCP 的长随机密钥 |
+| `ONTORAG_SERVICE_API_KEY` | 外部系统调用 REST/MCP 的长随机密钥；轮换时可用 `ONTORAG_SERVICE_API_KEYS=旧,新` |
 | `OPENROUTER_API_KEY` | DeepSeek API 密钥；变量名沿用 OntoRAG |
 | `OPENROUTER_BASE_URL` | `https://api.deepseek.com` |
 | `OPENROUTER_MODEL` | `deepseek-flash` |
@@ -46,6 +46,7 @@ notepad .env
 - 每份文档形成独立知识图谱，查询和 MCP 工具均需 `document_id`。当前不做跨文档联合查询。
 - 提案自动进入抽取，没有人工审查本体的审批环节。
 - Worker 最多重试 3 次；失败后可调用 `/v1/documents/{id}/retry`。中断任务在租约到期后重新领取。
+- Worker 处理时每分钟续租；同一任务不会在租约过期后由旧 worker 覆盖新结果。
 - 图和原文的持久化依赖私有 Blob；任务状态依赖 Postgres。缺任一资源时无法完成生产部署。
 - 查询仅允许 SPARQL SELECT，最多返回 500 行。上传、图下载和 MCP 均需 Bearer 密钥。
 

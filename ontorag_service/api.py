@@ -1,19 +1,42 @@
 import hashlib
 import hmac
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from fastapi import FastAPI, File, Header, HTTPException, Query, Request, UploadFile
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import Response
+from pydantic import BaseModel
+from sqlalchemy import select
 
-from .config import API_KEY, MAX_UPLOAD_BYTES
+from .config import API_KEYS, MAX_UPLOAD_BYTES
 from .db import Document, Session, document_data, get_document, init_db, list_documents
 from .graph import describe, select_query
-from .storage import get_bytes, put_bytes
+from .storage import delete_bytes, get_bytes, put_bytes
 from .mcp_api import mcp
 
 ALLOWED = {".md", ".txt", ".html", ".htm", ".epub", ".pdf"}
+logger = logging.getLogger(__name__)
+
+
+class DocumentOut(BaseModel):
+    id: str
+    filename: str
+    sha256: str
+    status: str
+    stage: str | None
+    error: str | None
+    attempts: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class DocumentsOut(BaseModel):
+    items: list[DocumentOut]
+
+
 mcp_app = mcp.http_app(path="/", stateless_http=True, json_response=True)
 
 
@@ -28,15 +51,33 @@ app = FastAPI(title="OntoRAG Integration API", version="1.0.0", lifespan=lifespa
 app.mount("/mcp", mcp_app)
 
 
+def service_openapi():
+    if app.openapi_schema is None:
+        spec = get_openapi(title=app.title, version=app.version, routes=app.routes)
+        spec.setdefault("components", {}).setdefault("securitySchemes", {})["ServiceBearer"] = {"type": "http", "scheme": "bearer"}
+        for path, methods in spec["paths"].items():
+            if path != "/health":
+                for operation in methods.values():
+                    operation["security"] = [{"ServiceBearer": []}]
+        app.openapi_schema = spec
+    return app.openapi_schema
+
+
+app.openapi = service_openapi
+
+
 @app.middleware("http")
 async def authenticate(request: Request, call_next):
     if request.url.path == "/health":
         return await call_next(request)
-    expected = API_KEY
     supplied = request.headers.get("authorization", "")
-    if not expected or not supplied.startswith("Bearer ") or not hmac.compare_digest(supplied[7:], expected):
-        return Response(content='{"detail":"unauthorized"}', status_code=401, media_type="application/json")
-    return await call_next(request)
+    valid = supplied.startswith("Bearer ") and any(hmac.compare_digest(supplied[7:], key) for key in API_KEYS)
+    if not valid:
+        return Response(content='{"detail":"unauthorized"}', status_code=401, media_type="application/json", headers={"Cache-Control": "no-store"})
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 @app.get("/health")
@@ -44,8 +85,10 @@ def health():
     return {"ok": True, "service": "ontorag-api"}
 
 
-@app.post("/v1/documents", status_code=202)
-async def upload_document(file: UploadFile = File(...), idempotency_key: str | None = Header(default=None)):
+@app.post("/v1/documents", status_code=202, response_model=DocumentOut, tags=["Documents"])
+async def upload_document(response: Response, file: UploadFile = File(...), idempotency_key: str | None = Header(default=None)):
+    if idempotency_key is not None and (not 1 <= len(idempotency_key) <= 128 or any(ord(c) < 33 or ord(c) > 126 for c in idempotency_key)):
+        raise HTTPException(400, "Idempotency-Key must be 1-128 printable ASCII characters without spaces")
     filename = (file.filename or "").split("/")[-1].split("\\")[-1]
     if not filename or len(filename) > 255 or not any(filename.lower().endswith(ext) for ext in ALLOWED):
         raise HTTPException(415, "supported formats: .md, .txt, .html, .htm, .epub, .pdf")
@@ -55,18 +98,26 @@ async def upload_document(file: UploadFile = File(...), idempotency_key: str | N
     digest = hashlib.sha256(content).hexdigest()
     # The idempotency key is scoped to one input hash; do not expose raw client keys in the database.
     document_id = str(uuid4()) if not idempotency_key else str(uuid5(NAMESPACE_URL, idempotency_key))
+    response.headers["Location"] = f"/v1/documents/{document_id}"
+    response.headers["Retry-After"] = "5"
     with Session() as session:
         existing = session.get(Document, document_id)
         if existing:
             if existing.sha256 != digest:
                 raise HTTPException(409, "idempotency key was used for different content")
             return document_data(existing)
-    source_key = put_bytes(f"sources/{document_id}/{filename}", content, file.content_type or "application/octet-stream")
+    # A unique blob pathname keeps concurrent retries from colliding before the DB row is committed.
+    extension = "." + filename.rsplit(".", 1)[-1].lower()
+    source_key = put_bytes(f"sources/{document_id}/{uuid4().hex}/source{extension}", content, file.content_type or "application/octet-stream")
     doc = Document(id=document_id, filename=filename, content_type=file.content_type or "application/octet-stream", sha256=digest, source_key=source_key)
     try:
         with Session.begin() as session:
             session.add(doc)
     except Exception:
+        try:
+            delete_bytes([source_key])
+        except Exception:
+            logger.exception("Could not clean up an unreferenced uploaded blob")
         with Session() as session:
             existing = session.get(Document, document_id)
             if existing and existing.sha256 == digest:
@@ -75,12 +126,12 @@ async def upload_document(file: UploadFile = File(...), idempotency_key: str | N
     return document_data(doc)
 
 
-@app.get("/v1/documents")
+@app.get("/v1/documents", response_model=DocumentsOut, tags=["Documents"])
 def documents(limit: int = Query(50, ge=1, le=100)):
     return {"items": list_documents(limit)}
 
 
-@app.get("/v1/documents/{document_id}")
+@app.get("/v1/documents/{document_id}", response_model=DocumentOut, tags=["Documents"])
 def document(document_id: str):
     doc = get_document(document_id)
     if not doc:
@@ -88,7 +139,20 @@ def document(document_id: str):
     return document_data(doc)
 
 
-@app.get("/v1/documents/{document_id}/graph")
+@app.delete("/v1/documents/{document_id}", status_code=204, tags=["Documents"])
+def delete_document(document_id: str):
+    with Session.begin() as session:
+        doc = session.scalars(select(Document).where(Document.id == document_id).with_for_update()).first()
+        if not doc:
+            raise HTTPException(404, "document not found")
+        if doc.status == "processing":
+            raise HTTPException(409, "processing document cannot be deleted yet")
+        delete_bytes([key for key in (doc.source_key, doc.graph_key, doc.schema_key) if key])
+        session.delete(doc)
+    return Response(status_code=204)
+
+
+@app.get("/v1/documents/{document_id}/graph", tags=["Knowledge Graph"], responses={200: {"content": {"text/turtle": {"schema": {"type": "string"}}}}})
 def graph(document_id: str):
     doc = get_document(document_id)
     if not doc:
@@ -98,7 +162,17 @@ def graph(document_id: str):
     return Response(get_bytes(doc.graph_key), media_type="text/turtle")
 
 
-@app.post("/v1/documents/{document_id}/retry", status_code=202)
+@app.get("/v1/documents/{document_id}/schema", tags=["Knowledge Graph"], responses={200: {"content": {"text/turtle": {"schema": {"type": "string"}}}}})
+def schema(document_id: str):
+    doc = get_document(document_id)
+    if not doc:
+        raise HTTPException(404, "document not found")
+    if doc.status != "completed" or not doc.schema_key:
+        raise HTTPException(409, "schema is not ready")
+    return Response(get_bytes(doc.schema_key), media_type="text/turtle")
+
+
+@app.post("/v1/documents/{document_id}/retry", status_code=202, response_model=DocumentOut, tags=["Documents"])
 def retry_document(document_id: str):
     with Session.begin() as session:
         doc = session.get(Document, document_id)
@@ -115,7 +189,7 @@ def retry_document(document_id: str):
         return document_data(doc)
 
 
-@app.post("/v1/documents/{document_id}/sparql")
+@app.post("/v1/documents/{document_id}/sparql", tags=["Knowledge Graph"], openapi_extra={"requestBody": {"required": True, "content": {"application/sparql-query": {"schema": {"type": "string", "example": "SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 20"}}}}})
 async def sparql(document_id: str, request: Request):
     query = (await request.body()).decode("utf-8")
     try:
@@ -126,7 +200,7 @@ async def sparql(document_id: str, request: Request):
         raise HTTPException(400, str(exc)) from exc
 
 
-@app.get("/v1/documents/{document_id}/describe")
+@app.get("/v1/documents/{document_id}/describe", tags=["Knowledge Graph"])
 def describe_iri(document_id: str, iri: str):
     try:
         return {"iri": iri, "properties": describe(document_id, iri)}

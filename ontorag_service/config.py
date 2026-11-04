@@ -14,8 +14,8 @@ elif DATABASE_URL.startswith("postgresql://"):
 if os.getenv("VERCEL") and not os.getenv("DATABASE_URL"):
     raise RuntimeError("DATABASE_URL is required on Vercel")
 STORAGE_BACKEND = os.getenv("STORAGE_BACKEND", "blob" if os.getenv("VERCEL") else "local")
-API_KEY = os.getenv("ONTORAG_SERVICE_API_KEY", "")
-if os.getenv("VERCEL") and not API_KEY:
-    raise RuntimeError("ONTORAG_SERVICE_API_KEY is required on Vercel")
+API_KEYS = tuple(key.strip() for key in os.getenv("ONTORAG_SERVICE_API_KEYS", os.getenv("ONTORAG_SERVICE_API_KEY", "")).split(",") if key.strip())
+if os.getenv("VERCEL") and not API_KEYS:
+    raise RuntimeError("ONTORAG_SERVICE_API_KEYS or ONTORAG_SERVICE_API_KEY is required on Vercel")
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(4 * 1024 * 1024)))
 PUBLIC_BASE_IRI = os.getenv("ONTORAG_BASE_IRI", "https://example.org/ontorag/")

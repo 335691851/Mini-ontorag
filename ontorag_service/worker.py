@@ -5,19 +5,21 @@ import subprocess
 import sys
 import tempfile
 import time
+from threading import Event, Thread
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from rdflib import Graph
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 
 from .config import PUBLIC_BASE_IRI
 from .db import Document, Session, init_db
 from .storage import get_bytes, put_bytes
 
 
-def claim_job() -> str | None:
+def claim_job() -> tuple[str, str] | None:
     now = datetime.now(timezone.utc)
     with Session.begin() as session:
         query = (
@@ -38,16 +40,35 @@ def claim_job() -> str | None:
         doc.stage = "propose"
         doc.error = None
         doc.attempts += 1
-        doc.lease_until = now + timedelta(hours=2)
+        token = str(uuid4())
+        doc.lease_token = token
+        doc.lease_until = now + timedelta(minutes=5)
         doc.updated_at = now
-        return doc.id
+        return doc.id, token
 
 
-def set_stage(document_id: str, stage: str) -> None:
+def set_stage(document_id: str, token: str, stage: str) -> None:
     with Session.begin() as session:
-        doc = session.get(Document, document_id)
-        doc.stage = stage
-        doc.updated_at = datetime.now(timezone.utc)
+        changed = session.execute(update(Document).where(Document.id == document_id, Document.lease_token == token).values(stage=stage, updated_at=datetime.now(timezone.utc))).rowcount
+        if changed != 1:
+            raise RuntimeError("job lease was lost")
+
+
+def renew_lease(document_id: str, token: str) -> bool:
+    with Session.begin() as session:
+        changed = session.execute(update(Document).where(Document.id == document_id, Document.lease_token == token, Document.status == "processing").values(lease_until=datetime.now(timezone.utc) + timedelta(minutes=5))).rowcount
+        return changed == 1
+
+
+def keep_lease(document_id: str, token: str, stop: Event, lost: Event) -> None:
+    while not stop.wait(60):
+        try:
+            if not renew_lease(document_id, token):
+                lost.set()
+                return
+        except Exception:
+            # A transient database error may recover before the existing lease expires.
+            pass
 
 
 def _cli() -> str:
@@ -76,7 +97,7 @@ def _run_stage(cli: str, stage: str, root: Path) -> None:
         raise RuntimeError(f"OntoRAG {stage} failed: {result.stdout[-1800:]}")
 
 
-def process_job(document_id: str) -> None:
+def process_job(document_id: str, token: str, lost: Event) -> None:
     api_key = os.getenv("OPENROUTER_API_KEY", "")
     if not api_key or api_key == "在这里填写密钥":
         raise RuntimeError("OPENROUTER_API_KEY is missing")
@@ -100,11 +121,15 @@ def process_job(document_id: str) -> None:
         (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
         cli = _cli()
         _run_stage(cli, "propose", root)
+        if lost.is_set():
+            raise RuntimeError("job lease was lost")
         proposals = root / "ontology" / "proposals.raw.jsonl"
         if not proposals.is_file() or not proposals.read_text(encoding="utf-8").strip():
             raise RuntimeError("OntoRAG produced no schema proposal; check model credentials and response")
-        set_stage(document_id, "extract")
+        set_stage(document_id, token, "extract")
         _run_stage(cli, "extract", root)
+        if lost.is_set():
+            raise RuntimeError("job lease was lost")
         graph = root / "ontology" / "world.ttl"
         schema = root / "ontology" / "schema.ttl"
         if not graph.is_file() or not schema.is_file():
@@ -113,33 +138,37 @@ def process_job(document_id: str) -> None:
         parsed.parse(graph, format="turtle")
         if len(parsed) == 0:
             raise RuntimeError("OntoRAG produced an empty instance graph")
-        graph_key = put_bytes(f"graphs/{document_id}/world.ttl", graph.read_bytes(), "text/turtle")
-        schema_key = put_bytes(f"graphs/{document_id}/schema.ttl", schema.read_bytes(), "text/turtle")
+        graph_key = put_bytes(f"graphs/{document_id}/{token}/world.ttl", graph.read_bytes(), "text/turtle")
+        schema_key = put_bytes(f"graphs/{document_id}/{token}/schema.ttl", schema.read_bytes(), "text/turtle")
     with Session.begin() as session:
-        doc = session.get(Document, document_id)
-        doc.graph_key = graph_key
-        doc.schema_key = schema_key
-        doc.status = "completed"
-        doc.stage = None
-        doc.error = None
-        doc.lease_until = None
-        doc.updated_at = datetime.now(timezone.utc)
+        changed = session.execute(update(Document).where(Document.id == document_id, Document.lease_token == token).values(graph_key=graph_key, schema_key=schema_key, status="completed", stage=None, error=None, lease_until=None, lease_token=None, updated_at=datetime.now(timezone.utc))).rowcount
+        if changed != 1:
+            raise RuntimeError("job lease was lost")
 
 
 def run_once() -> bool:
-    job_id = claim_job()
-    if not job_id:
+    claimed = claim_job()
+    if not claimed:
         return False
+    job_id, token = claimed
+    stop, lost = Event(), Event()
+    heartbeat = Thread(target=keep_lease, args=(job_id, token, stop, lost), daemon=True)
+    heartbeat.start()
     try:
-        process_job(job_id)
+        process_job(job_id, token, lost)
     except Exception as exc:
         with Session.begin() as session:
             doc = session.get(Document, job_id)
-            doc.status = "failed" if doc.attempts >= 3 else "queued"
-            doc.error = str(exc)[-1800:]
-            doc.stage = None
-            doc.lease_until = None if doc.status == "failed" else datetime.now(timezone.utc) + timedelta(minutes=2 ** doc.attempts)
-            doc.updated_at = datetime.now(timezone.utc)
+            if doc and doc.lease_token == token:
+                doc.status = "failed" if doc.attempts >= 3 else "queued"
+                doc.error = str(exc)[-1800:]
+                doc.stage = None
+                doc.lease_until = None if doc.status == "failed" else datetime.now(timezone.utc) + timedelta(minutes=2 ** doc.attempts)
+                doc.lease_token = None
+                doc.updated_at = datetime.now(timezone.utc)
+    finally:
+        stop.set()
+        heartbeat.join(timeout=2)
     return True
 
 

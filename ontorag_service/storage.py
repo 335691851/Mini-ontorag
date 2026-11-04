@@ -24,3 +24,14 @@ def get_bytes(key: str) -> bytes:
             raise FileNotFoundError(key)
         return result.body
     return (ROOT / "data" / "objects" / key).read_bytes()
+
+
+def delete_bytes(keys: list[str]) -> None:
+    if STORAGE_BACKEND == "blob":
+        from vercel.blob.sync import delete_blob
+
+        if keys:
+            delete_blob(keys)
+        return
+    for key in keys:
+        (ROOT / "data" / "objects" / key).unlink(missing_ok=True)

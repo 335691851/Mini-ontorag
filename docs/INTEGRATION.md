@@ -1,6 +1,25 @@
 # 外部业务系统对接
 
-服务根地址记为 `BASE_URL`。除 `/health` 外，请求都带 `Authorization: Bearer <ONTORAG_SERVICE_API_KEY>`。仅服务端持有密钥，不要放入浏览器或移动端代码。生产环境使用 HTTPS。
+服务根地址记为 `BASE_URL`。除 `/health` 外，请求都带 `Authorization: Bearer <服务密钥>`。仅服务端持有密钥，不要放入浏览器或移动端代码。生产环境使用 HTTPS。REST 与 MCP 共用同一组密钥；此部署只面向一个可信业务系统，没有按用户或租户划分的权限。
+
+部署时设置 `ONTORAG_SERVICE_API_KEY`。轮换时可改设 `ONTORAG_SERVICE_API_KEYS=旧密钥,新密钥`，让调用方切换到新密钥后再移除旧密钥并重新部署。密钥应为随机生成的长字符串。
+
+接口版本固定在 `/v1`。`GET /openapi.json` 和 `/docs` 也需要 Bearer 密钥。业务接口清单：
+
+| 方法与路径 | 用途 |
+| --- | --- |
+| `POST /v1/documents` | 上传并创建抽取任务 |
+| `GET /v1/documents` | 列出最近文档，`limit` 为 1–100 |
+| `GET /v1/documents/{id}` | 查询状态 |
+| `POST /v1/documents/{id}/retry` | 重新处理失败任务 |
+| `GET /v1/documents/{id}/graph` | 下载 RDF 实例图 |
+| `GET /v1/documents/{id}/schema` | 下载本体 RDF |
+| `POST /v1/documents/{id}/sparql` | 只读 SELECT 查询 |
+| `GET /v1/documents/{id}/describe` | 查看资源属性 |
+| `DELETE /v1/documents/{id}` | 删除文档、任务记录和产物 |
+| `POST /mcp/` | MCP Streamable HTTP 入口 |
+
+列表只返回最近最多 100 条，不提供翻页；业务系统应保存上传响应中的 `document_id`。
 
 ## 上传文件
 
@@ -13,15 +32,27 @@ curl -X POST "$BASE_URL/v1/documents" \
   -F "file=@manual.pdf"
 ```
 
-成功返回 HTTP `202` 与 `id`、`status=queued`、`sha256`。业务系统保存 `id` 作为 `document_id`。目前文件上限 4 MiB；支持 `.md`、`.txt`、`.html`、`.htm`、`.epub`、`.pdf`。
+成功返回 HTTP `202`，例如：
+
+响应头 `Location: /v1/documents/{id}` 指向状态接口，`Retry-After: 5` 给出建议的首次轮询间隔。
+
+```json
+{"id":"6e4c10c2-4862-461c-9878-dac468bd840e","filename":"manual.pdf","sha256":"...","status":"queued","stage":null,"error":null,"attempts":0,"created_at":"2026-11-04T00:00:00+00:00","updated_at":"2026-11-04T00:00:00+00:00"}
+```
+
+业务系统保存 `id` 作为 `document_id`。同一幂等键和相同内容再次提交会返回原 `id` 及其当前状态；不同内容返回 `409`。幂等键限 1–128 个无空格的可打印 ASCII 字符。文件上限 4 MiB；支持 `.md`、`.txt`、`.html`、`.htm`、`.epub`、`.pdf`。
 
 ## 跟踪任务
 
 `GET /v1/documents/{document_id}` 返回 `queued`、`processing`、`completed` 或 `failed`，并带 `stage`、`attempts`、`error`。每 5–15 秒轮询；到 `completed` 后读取图。若为 `failed`，查看 `error`，修复配置后调用 `POST /v1/documents/{document_id}/retry`。`GET /v1/documents?limit=50` 列出最近任务。
 
+自动重试最多 3 次。重试期间状态回到 `queued`，`lease_until` 未到时 worker 不会重复领取。业务系统应以 `status` 为准，不依据 `attempts` 判断完成。
+
 ## 获取图与查询
 
-`GET /v1/documents/{document_id}/graph` 返回 Turtle RDF。
+`GET /v1/documents/{document_id}/graph` 返回实例图 Turtle RDF；`GET /v1/documents/{document_id}/schema` 返回抽取的本体 Turtle RDF。两者仅在 `completed` 后可用。
+
+`DELETE /v1/documents/{document_id}` 删除任务记录、原始文件与生成的图，成功返回 `204`。处理中的文档返回 `409`，请等任务完成或失败后重试。删除后同一 `document_id` 的查询返回 `404`。
 
 `POST /v1/documents/{document_id}/sparql` 请求体放 SPARQL 文本，`Content-Type: application/sparql-query`；仅允许 SELECT。例如：
 
@@ -49,8 +80,16 @@ Streamable HTTP MCP 端点为 `BASE_URL/mcp/`。请求头同样使用 Bearer 密
 }
 ```
 
-实际客户端配置格式可能不同，但 URL 与 Authorization 头保持一致。工具包括 `list_knowledge_documents`、`get_knowledge_document`、`sparql_select`、`describe_resource`。后两项必须传 `document_id`。
+实际客户端配置格式可能不同，但 URL 与 Authorization 头保持一致。工具包括 `list_knowledge_documents`、`get_knowledge_document`、`sparql_select`、`describe_resource`。后两项必须传 `document_id`。例如 `sparql_select` 的参数：
+
+```json
+{"document_id":"6e4c10c2-4862-461c-9878-dac468bd840e","query":"SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 20"}
+```
+
+文件上传走 REST；MCP 用于读取任务状态和查询知识图谱。MCP 使用 Streamable HTTP，客户端需支持给 MCP 请求附加 Bearer 请求头。
 
 ## 错误与权限
 
-`401` 密钥缺失或错误；`413` 文件超限；`415` 格式不支持；`409` 幂等冲突或图尚未完成；`400` 非 SELECT 查询；`404` 文档不存在。错误响应使用 `detail` 字段。单用户部署共享一个密钥，没有多租户隔离或细粒度权限。私有 Blob 中的原文和 RDF 不直接公开；调用方经受保护 API 获取结果。
+`401` 密钥缺失或错误；`413` 文件超限；`415` 格式不支持；`409` 幂等冲突、重试状态不符或图尚未完成；`400` 幂等键不合法或非 SELECT 查询；`404` 文档不存在；`422` 请求字段缺失。REST 错误响应使用 `detail` 字段。`/health` 只表示 API 进程可响应；成功抽取还依赖 worker、Postgres、Blob 和模型 API。私有 Blob 中的原文和 RDF 不直接公开；调用方经受保护 API 获取结果。
+
+网络错误和 `5xx` 可以用同一个 `Idempotency-Key` 重试上传。MCP 工具失败以 MCP 错误结果返回，业务系统应记录工具名、`document_id` 和错误文本。当前没有 webhook，使用状态轮询；没有按调用方细分权限或内置限流，密钥泄露后持有者可访问并删除全部文档。

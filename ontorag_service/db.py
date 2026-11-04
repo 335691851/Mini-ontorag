@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import DateTime, Integer, String, Text, create_engine, select, text
+from sqlalchemy import DateTime, Integer, String, Text, create_engine, inspect, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from .config import DATABASE_URL
@@ -26,6 +26,7 @@ class Document(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
@@ -47,6 +48,11 @@ def init_db() -> None:
             connection.execute(text("SELECT pg_advisory_xact_lock(78621017)"))
             connection.execute(text("CREATE SCHEMA IF NOT EXISTS ontorag"))
         Base.metadata.create_all(connection)
+        schema = "ontorag" if engine.dialect.name == "postgresql" else None
+        columns = {column["name"] for column in inspect(connection).get_columns("documents", schema=schema)}
+        if "lease_token" not in columns:
+            table = "ontorag.documents" if schema else "documents"
+            connection.execute(text(f"ALTER TABLE {table} ADD COLUMN lease_token VARCHAR(36)"))
 
 
 def document_data(doc: Document) -> dict:
