@@ -13,7 +13,7 @@ from rdflib import Graph, Namespace, URIRef
 from rdflib.namespace import OWL, RDF, RDFS
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ontorag_service.domain import PROVENANCE, remove_number_only_clauses
+from ontorag_service.domain import PROVENANCE, normalize_policy_clauses, resolve_reference_numbers, canonical_entity_iri
 
 
 ORP = Namespace("https://ontorag.org/provenance#")
@@ -44,7 +44,8 @@ def document_data(doc: dict, graph_dir: Path) -> dict:
     graph_path = graph_dir / f"{document_id}.graph.ttl"
     graph_text = graph_path.read_text(encoding="utf-8")
     graph.parse(data=graph_text, format="turtle")
-    remove_number_only_clauses(graph)
+    normalize_policy_clauses(graph)
+    resolve_reference_numbers(graph, Path(doc["source"]).name)
     schema.parse(graph_dir / f"{document_id}.schema.ttl", format="turtle")
     classes = {subject for subject in schema.subjects(RDF.type, OWL.Class) if isinstance(subject, URIRef)}
     if not classes:
@@ -115,19 +116,31 @@ def document_data(doc: dict, graph_dir: Path) -> dict:
 def combined_instances(docs: list[dict]) -> dict:
     nodes = {}
     edges = {}
+    replacements = {}
     for doc in docs:
         for node in doc["instances"]["nodes"]:
-            if node["id"] not in nodes:
-                nodes[node["id"]] = {**node, "documents": [doc["title"]]}
+            canonical = canonical_entity_iri(node["type"], node["label"])
+            if canonical:
+                replacements[node["id"]] = str(canonical)
+    for doc in docs:
+        for node in doc["instances"]["nodes"]:
+            node_id = replacements.get(node["id"], node["id"])
+            if node_id not in nodes:
+                nodes[node_id] = {**node, "id": node_id, "documents": [doc["title"]]}
             else:
-                existing = nodes[node["id"]]
+                existing = nodes[node_id]
                 if doc["title"] not in existing["documents"]:
                     existing["documents"].append(doc["title"])
                 for evidence in node["evidence"]:
                     if evidence not in existing["evidence"]:
                         existing["evidence"].append(evidence)
+                for attr in node["attributes"]:
+                    if attr not in existing["attributes"]:
+                        existing["attributes"].append(attr)
         for edge in doc["instances"]["edges"]:
-            edges[(edge["source"], edge["iri"], edge["target"])] = edge
+            source = replacements.get(edge["source"], edge["source"])
+            target = replacements.get(edge["target"], edge["target"])
+            edges[(source, edge["iri"], target)] = {**edge, "source": source, "target": target}
     return {"nodes": list(nodes.values()), "edges": list(edges.values())}
 
 

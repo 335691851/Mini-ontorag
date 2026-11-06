@@ -17,7 +17,7 @@ from .graph import describe, select_query, select_domain_query, domain_summary
 from .storage import delete_bytes, get_bytes, put_bytes
 from .mcp_api import mcp
 from .ontology import valid_schema_turtle
-from .domain import ONTOLOGY_VERSION, schema_card, schema_turtle, validate_instance_graph, remove_number_only_clauses
+from .domain import ONTOLOGY_VERSION, schema_card, schema_turtle, validate_instance_graph, normalize_policy_clauses, resolve_reference_numbers
 from rdflib import Graph
 
 ALLOWED = {".md", ".txt", ".html", ".htm", ".epub", ".pdf"}
@@ -164,7 +164,7 @@ async def worker_artifacts(
     x_worker_lease: str | None = Header(default=None),
     x_ontology_version: str | None = Header(default=None),
 ):
-    _active_worker_document(document_id, x_worker_lease)
+    worker_doc = _active_worker_document(document_id, x_worker_lease)
     if x_ontology_version is not None and x_ontology_version != ONTOLOGY_VERSION:
         raise HTTPException(409, "unknown ontology version")
     graph_data = await graph.read(MAX_UPLOAD_BYTES + 1)
@@ -174,7 +174,7 @@ async def worker_artifacts(
     if x_ontology_version:
         try:
             parsed_graph = Graph().parse(data=graph_data.decode("utf-8"), format="turtle")
-            if remove_number_only_clauses(parsed_graph):
+            if normalize_policy_clauses(parsed_graph) + resolve_reference_numbers(parsed_graph, worker_doc.filename):
                 graph_data = parsed_graph.serialize(format="turtle").encode("utf-8")
             validate_instance_graph(parsed_graph)
             if set(Graph().parse(data=schema_data.decode("utf-8"), format="turtle")) != set(Graph().parse(data=schema_turtle().decode("utf-8"), format="turtle")):
@@ -229,7 +229,7 @@ def graph(document_id: str):
         raise HTTPException(409, "graph is not ready")
     graph_data = get_bytes(doc.graph_key)
     parsed = Graph().parse(data=graph_data.decode("utf-8"), format="turtle")
-    if remove_number_only_clauses(parsed):
+    if normalize_policy_clauses(parsed) + resolve_reference_numbers(parsed, doc.filename):
         return Response(parsed.serialize(format="turtle"), media_type="text/turtle")
     return Response(graph_data, media_type="text/turtle")
 

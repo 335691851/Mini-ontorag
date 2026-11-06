@@ -10,7 +10,7 @@
 | 法务 | `Contract`、`ContractReview`、`LegalDisputeCase`、`LegalOpinion` | `reviewsContract`、`involvesContract`、`handledBy` |
 | 审计与整改 | `AuditProject`、`AuditFinding`、`AuditReport`、`RectificationAction`、`AccountabilityAction` | `producesFinding`、`findingEvidence`、`requiresRectification`、`triggersAccountability` |
 
-`PolicyClause` 只用于有实际规则名称的条款；单独的“第一条”“第二条”等编号不是领域实体。抽取后会清除纯编号条款节点；编号明确时作为 `https://ontorag.org/provenance#sourceClauseNumber` 来源属性附到其连接的业务实体上，并把条款的原文引用和来源文件转给这些实体。旧版已存图在读取、SPARQL 查询和离线查看器生成时也执行同一规则，无需重新调用模型。若抽取器把多个编号误放到同一节点，只在原文引用节点保留这些编号，不把无法确定的编号归给业务实体。若该条没有抽出业务实体，编号仍留在原文引用节点，不增加领域实体。另一个文件提到同一类岗位时仍使用 `Role` 这个类，因此可按全领域类型查询。审计发现与整改措施通过 `requiresRectification` 连接，原文引用随实例保留。
+`PolicyClause` 表示有正文内容的制度规则，“第一条”“第二条”等编号只是出处属性。抽取器若用编号作节点名称，系统会用唯一的条款正文重新命名规则实体，保留原有关联关系；编号记录在 `clauseNumber` 和 `https://ontorag.org/provenance#sourceClauseNumber`，原文引用也关联到业务目标。若一个节点混合多条正文和编号，系统不猜测它们之间的对应关系，而将编号留在引用节点并移除有歧义的领域节点。关系目标类型不符合本体时，原断言记录为 `https://ontorag.org/provenance#UnverifiedRelation`，不当作已确认的领域关系。旧图在读取、SPARQL 查询和离线导出时执行相同规则，无需重新调用模型。
 
 ## 数据分层
 
@@ -18,7 +18,7 @@
 2. **文件事实**：模型从各份文件抽取的实体、属性、关系。每份文件单独保存 RDF 图，便于追溯和重处理；各图使用相同本体命名空间。
 3. **全域查询**：`POST /v1/knowledge-graph/sparql` 在查询时合并当前版本的文件事实与一份领域本体。MCP 工具 `sparql_select_domain` 提供同样的查询能力。
 
-实例 IRI 目前根据来源文本块生成。同一名称在不同文件中可能对应多个实例，系统不会自动声称它们是同一法人、岗位或事项。跨文件归并需要增加企业主数据标识、别名规则与人工审核；仅凭名称相同不得合并。模型提取的是制度中的陈述，不表示实际业务中已发生违规、风险、审计发现或整改。
+实例 IRI 目前根据来源文本块生成。跨文件全域查询仅对本批制度中完整法人名称“鲁银投资集团股份有限公司”的精确匹配统一身份，并为原 IRI 保留 `owl:sameAs`；每份文档图仍保留自身 IRI 和引用。其余同名实体（尤其“权属企业”等泛称）不自动合并，仍需企业主数据标识与人工消歧。多个文号同时挂在一份制度上时，只有文件名与制度名称都明确支持的文号会保留为 `referenceNumber`，其他值转为待核查的出处属性。模型提取的是制度中的陈述，不表示实际业务中已发生违规、风险、审计发现或整改。
 
 ## 版本和变更
 

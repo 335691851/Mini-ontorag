@@ -8,7 +8,7 @@ from sqlalchemy import select
 from .db import Document, Session, get_document
 from .storage import get_bytes
 from .ontology import valid_schema_turtle
-from .domain import ONTOLOGY_VERSION, schema_card, schema_turtle, remove_number_only_clauses
+from .domain import ONTOLOGY_VERSION, schema_card, schema_turtle, normalize_policy_clauses, resolve_reference_numbers, canonicalize_domain_entities
 
 
 def graph_for(document_id: str) -> Graph:
@@ -21,22 +21,26 @@ def graph_for(document_id: str) -> Graph:
     if doc.schema_key:
         graph.parse(data=valid_schema_turtle(get_bytes(doc.schema_key), document_id).decode("utf-8"), format="turtle")
     graph.parse(data=get_bytes(doc.graph_key).decode("utf-8"), format="turtle")
-    remove_number_only_clauses(graph)
+    normalize_policy_clauses(graph)
+    resolve_reference_numbers(graph, doc.filename)
     return graph
 
 
 def domain_graph() -> tuple[Graph, list[str]]:
     with Session() as session:
         docs = session.scalars(select(Document).where(Document.status == "completed", Document.ontology_version == ONTOLOGY_VERSION).order_by(Document.created_at).limit(101)).all()
-        keys = [(doc.id, doc.graph_key) for doc in docs if doc.graph_key]
+        keys = [(doc.id, doc.graph_key, doc.filename) for doc in docs if doc.graph_key]
     if len(keys) > 100:
         raise ValueError("domain graph currently supports at most 100 completed documents")
     graph = Graph()
     graph.parse(data=schema_turtle().decode("utf-8"), format="turtle")
-    for _, key in keys:
-        graph.parse(data=get_bytes(key).decode("utf-8"), format="turtle")
-    remove_number_only_clauses(graph)
-    return graph, [doc_id for doc_id, _ in keys]
+    for _, key, filename in keys:
+        instance = Graph().parse(data=get_bytes(key).decode("utf-8"), format="turtle")
+        normalize_policy_clauses(instance)
+        resolve_reference_numbers(instance, filename)
+        graph += instance
+    canonicalize_domain_entities(graph)
+    return graph, [doc_id for doc_id, _, _ in keys]
 
 
 def domain_summary() -> dict:

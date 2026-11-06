@@ -84,7 +84,7 @@
     const current = () => docIndex < 0 ? null : DATA.documents[docIndex];
     const rawGraph = () => mode === 'ontology' ? DATA.domain : (current()?.instances || DATA.allInstances);
     function init() {
-      $('summary').textContent = `${DATA.documents.length} 份制度共用 1 套领域本体 · ${DATA.domain.nodes.length} 个类 · ${DATA.domain.edges.length} 种对象关系 · ${DATA.totals.entities} 个文件实例`;
+      $('summary').textContent = `${DATA.documents.length} 份制度共用 1 套领域本体 · ${DATA.domain.nodes.length} 个类 · ${DATA.domain.edges.length} 种对象关系 · ${DATA.allInstances.nodes.length} 个跨文件实体（${DATA.totals.entities} 个文件实例）`;
       const all=document.createElement('option'); all.value=-1; all.textContent='全部制度 · 全域图谱'; $('docSelect').appendChild(all);
       DATA.documents.forEach((doc,index) => { const option=document.createElement('option'); option.value=index; option.textContent=`${doc.folder} · ${doc.title}`; $('docSelect').appendChild(option); });
       $('docSelect').addEventListener('change', event => { docIndex=Number(event.target.value); selectedId=null; $('search').value='';syncButtons();render(); });
