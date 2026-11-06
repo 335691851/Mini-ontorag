@@ -8,6 +8,7 @@ from pathlib import Path
 from rdflib import Graph
 
 from scripts.build_graph_viewer import combined_instances, document_data
+from ontorag_service.domain import remove_number_only_clauses
 
 
 def export(manifest: Path, graph_dir: Path, output_dir: Path) -> dict:
@@ -28,6 +29,7 @@ def export(manifest: Path, graph_dir: Path, output_dir: Path) -> dict:
             raise ValueError(f"Different ontology in document {document_id}")
         graph.parse(graph_dir / f"{document_id}.graph.ttl", format="turtle")
         docs.append(document_data(record, graph_dir))
+    remove_number_only_clauses(graph)
     instances = combined_instances(docs)
     graph.serialize(destination=output_dir / "领域知识图谱-全集.ttl", format="turtle")
     schema.serialize(destination=output_dir / "领域本体.ttl", format="turtle")
