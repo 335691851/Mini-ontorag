@@ -15,9 +15,10 @@ from rdflib import Graph
 
 from sqlalchemy import or_, select, update
 
-from .db import Document, Session, init_db
+from .db import Document, Session, archive_graph, init_db
 from .storage import get_bytes, put_bytes
 from .domain import ONTOLOGY_VERSION, schema_card, schema_turtle, validate_instance_graph, normalize_document_graph
+from .quality import graph_quality_report
 
 
 def _api_client() -> tuple[str, dict[str, str]] | None:
@@ -37,11 +38,12 @@ def _remote_source(base: str, headers: dict[str, str], document_id: str, token: 
         return response.content
 
 
-def _remote_artifacts(base: str, headers: dict[str, str], document_id: str, token: str, graph: Path, schema: Path) -> None:
+def _remote_artifacts(base: str, headers: dict[str, str], document_id: str, token: str, graph: Path, schema: Path, diagnostics: dict) -> None:
     with httpx.Client(timeout=120) as client, graph.open("rb") as graph_file, schema.open("rb") as schema_file:
         response = client.post(
             f"{base}/v1/internal/documents/{document_id}/artifacts",
             headers={**headers, "X-Worker-Lease": token, "X-Ontology-Version": ONTOLOGY_VERSION},
+            data={"diagnostics": json.dumps(diagnostics, ensure_ascii=False)},
             files={"graph": ("world.ttl", graph_file, "text/turtle"), "schema": ("schema.ttl", schema_file, "text/turtle")},
         )
         response.raise_for_status()
@@ -112,6 +114,7 @@ def _cli() -> str:
 def _run_cli(cli: str, root: Path, *args: str) -> None:
     env = os.environ.copy()
     env["PATH"] = str(Path(cli).parent) + os.pathsep + env.get("PATH", "")
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent) + os.pathsep + env.get("PYTHONPATH", "")
     result = subprocess.run(
         [cli, *args],
         cwd=root,
@@ -154,7 +157,9 @@ def process_job(document_id: str, token: str, lost: Event) -> None:
             raise RuntimeError("OntoRAG did not produce one nonempty chunk file")
         set_stage(document_id, token, "extract")
         graph = ontology / "world.ttl"
-        _run_cli(cli, root, "extract-instances", "--chunks", str(chunks[0]), "--schema-card", str(card_path), "--out-ttl", str(graph))
+        diagnostics_path = ontology / "extraction_diagnostics.json"
+        _run_cli(sys.executable, root, "-m", "ontorag_service.extract_instances", "--chunks", str(chunks[0]),
+                 "--schema-card", str(card_path), "--out-ttl", str(graph), "--diagnostics", str(diagnostics_path))
         if lost.is_set():
             raise RuntimeError("job lease was lost")
         if not graph.is_file() or not schema.is_file():
@@ -166,19 +171,34 @@ def process_job(document_id: str, token: str, lost: Event) -> None:
         if normalize_document_graph(parsed, filename):
             graph.write_text(parsed.serialize(format="turtle"), encoding="utf-8")
         validate_instance_graph(parsed)
+        diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8")) if diagnostics_path.is_file() else {}
+        quality = graph_quality_report(parsed, diagnostics)
         schema_graph = Graph()
         schema_graph.parse(schema, format="turtle")
         if len(schema_graph) == 0:
             raise RuntimeError("OntoRAG produced an empty schema graph")
         if remote:
-            _remote_artifacts(*remote, document_id, token, graph, schema)
+            _remote_artifacts(*remote, document_id, token, graph, schema, diagnostics)
             return
         graph_key = put_bytes(f"graphs/{document_id}/{token}/world.ttl", graph.read_bytes(), "text/turtle")
         schema_key = put_bytes(f"graphs/{document_id}/{token}/schema.ttl", schema.read_bytes(), "text/turtle")
     with Session.begin() as session:
-        changed = session.execute(update(Document).where(Document.id == document_id, Document.lease_token == token).values(graph_key=graph_key, schema_key=schema_key, ontology_version=ONTOLOGY_VERSION, status="completed", stage=None, error=None, lease_until=None, lease_token=None, updated_at=datetime.now(timezone.utc))).rowcount
-        if changed != 1:
+        doc = session.scalars(select(Document).where(Document.id == document_id).with_for_update()).first()
+        if not doc or doc.lease_token != token or doc.status != "processing":
             raise RuntimeError("job lease was lost")
+        archive_graph(doc)
+        doc.graph_key = graph_key
+        doc.schema_key = schema_key
+        doc.ontology_version = ONTOLOGY_VERSION
+        doc.quality_json = json.dumps(quality, ensure_ascii=False)
+        doc.reviewed_at = None
+        doc.review_note = None
+        doc.status = "needs_review"
+        doc.stage = None
+        doc.error = None
+        doc.lease_until = None
+        doc.lease_token = None
+        doc.updated_at = datetime.now(timezone.utc)
 
 
 def run_once() -> bool:

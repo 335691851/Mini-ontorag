@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -20,11 +21,15 @@ class Document(Base):
     sha256: Mapped[str] = mapped_column(String(64), index=True)
     source_key: Mapped[str] = mapped_column(Text)
     graph_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    graph_history_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     schema_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     ontology_version: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
     stage: Mapped[str | None] = mapped_column(String(24), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    quality_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     lease_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
@@ -57,6 +62,15 @@ def init_db() -> None:
         if "ontology_version" not in columns:
             table = "ontorag.documents" if schema else "documents"
             connection.execute(text(f"ALTER TABLE {table} ADD COLUMN ontology_version VARCHAR(64)"))
+        table = "ontorag.documents" if schema else "documents"
+        if "quality_json" not in columns:
+            connection.execute(text(f"ALTER TABLE {table} ADD COLUMN quality_json TEXT"))
+        if "graph_history_json" not in columns:
+            connection.execute(text(f"ALTER TABLE {table} ADD COLUMN graph_history_json TEXT"))
+        if "reviewed_at" not in columns:
+            connection.execute(text(f"ALTER TABLE {table} ADD COLUMN reviewed_at TIMESTAMP WITH TIME ZONE"))
+        if "review_note" not in columns:
+            connection.execute(text(f"ALTER TABLE {table} ADD COLUMN review_note TEXT"))
 
 
 def document_data(doc: Document) -> dict:
@@ -67,11 +81,23 @@ def document_data(doc: Document) -> dict:
         "status": doc.status,
         "stage": doc.stage,
         "error": doc.error,
+        "quality": json.loads(doc.quality_json) if doc.quality_json else None,
+        "reviewed_at": doc.reviewed_at.isoformat() if doc.reviewed_at else None,
+        "review_note": doc.review_note,
         "attempts": doc.attempts,
         "ontology_version": doc.ontology_version,
         "created_at": doc.created_at.isoformat() if doc.created_at else None,
         "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,
     }
+
+
+def archive_graph(doc: Document) -> None:
+    """Retain the previous immutable Blob before replacing a document graph."""
+    if not doc.graph_key:
+        return
+    history = json.loads(doc.graph_history_json) if doc.graph_history_json else []
+    history.append({"graph_key": doc.graph_key, "archived_at": datetime.now(timezone.utc).isoformat()})
+    doc.graph_history_json = json.dumps(history, ensure_ascii=False)
 
 
 def get_document(document_id: str) -> Document | None:

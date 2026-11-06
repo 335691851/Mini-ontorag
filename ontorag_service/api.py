@@ -1,23 +1,25 @@
 import hashlib
 import hmac
+import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from fastapi import FastAPI, File, Header, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from .config import API_KEYS, MAX_UPLOAD_BYTES
-from .db import Document, Session, document_data, get_document, init_db, list_documents
-from .graph import describe, select_query, select_domain_query, domain_summary
+from .db import Document, Session, archive_graph, document_data, get_document, init_db, list_documents
+from .graph import describe, graph_for, select_query, select_domain_query, domain_summary
 from .storage import delete_bytes, get_bytes, put_bytes
 from .mcp_api import mcp
 from .ontology import valid_schema_turtle
 from .domain import ONTOLOGY_VERSION, schema_card, schema_turtle, validate_instance_graph, normalize_document_graph
+from .quality import graph_quality_report
 from rdflib import Graph
 
 ALLOWED = {".md", ".txt", ".html", ".htm", ".epub", ".pdf"}
@@ -31,6 +33,9 @@ class DocumentOut(BaseModel):
     status: str
     stage: str | None
     error: str | None
+    quality: dict | None
+    reviewed_at: datetime | None
+    review_note: str | None
     attempts: int
     ontology_version: str | None
     created_at: datetime
@@ -39,6 +44,10 @@ class DocumentOut(BaseModel):
 
 class DocumentsOut(BaseModel):
     items: list[DocumentOut]
+
+
+class PublishRequest(BaseModel):
+    note: str = Field(min_length=3, max_length=1000)
 
 
 mcp_app = mcp.http_app(path="/", stateless_http=True, json_response=True)
@@ -163,24 +172,30 @@ async def worker_artifacts(
     schema_file: UploadFile = File(..., alias="schema"),
     x_worker_lease: str | None = Header(default=None),
     x_ontology_version: str | None = Header(default=None),
+    diagnostics: str = Form(default="{}"),
 ):
     worker_doc = _active_worker_document(document_id, x_worker_lease)
-    if x_ontology_version is not None and x_ontology_version != ONTOLOGY_VERSION:
+    if x_ontology_version != ONTOLOGY_VERSION:
         raise HTTPException(409, "unknown ontology version")
     graph_data = await graph.read(MAX_UPLOAD_BYTES + 1)
     schema_data = valid_schema_turtle(await schema_file.read(MAX_UPLOAD_BYTES + 1), document_id)
     if not graph_data or not schema_data or len(graph_data) + len(schema_data) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "graph and schema must be nonempty and at most MAX_UPLOAD_BYTES combined")
-    if x_ontology_version:
-        try:
-            parsed_graph = Graph().parse(data=graph_data.decode("utf-8"), format="turtle")
-            if normalize_document_graph(parsed_graph, worker_doc.filename):
-                graph_data = parsed_graph.serialize(format="turtle").encode("utf-8")
-            validate_instance_graph(parsed_graph)
-            if set(Graph().parse(data=schema_data.decode("utf-8"), format="turtle")) != set(Graph().parse(data=schema_turtle().decode("utf-8"), format="turtle")):
-                raise ValueError("schema does not match current domain ontology")
-        except Exception as exc:
-            raise HTTPException(422, f"invalid domain graph: {exc}") from exc
+    try:
+        if len(diagnostics) > 20000:
+            raise ValueError("extraction diagnostics too large")
+        extraction = json.loads(diagnostics)
+        if not isinstance(extraction, dict):
+            raise ValueError("extraction diagnostics must be an object")
+        parsed_graph = Graph().parse(data=graph_data.decode("utf-8"), format="turtle")
+        if normalize_document_graph(parsed_graph, worker_doc.filename):
+            graph_data = parsed_graph.serialize(format="turtle").encode("utf-8")
+        validate_instance_graph(parsed_graph)
+        quality = graph_quality_report(parsed_graph, extraction)
+        if set(Graph().parse(data=schema_data.decode("utf-8"), format="turtle")) != set(Graph().parse(data=schema_turtle().decode("utf-8"), format="turtle")):
+            raise ValueError("schema does not match current domain ontology")
+    except Exception as exc:
+        raise HTTPException(422, f"invalid domain graph: {exc}") from exc
     graph_key = schema_key = None
     try:
         graph_key = put_bytes(f"graphs/{document_id}/{x_worker_lease}/world.ttl", graph_data, "text/turtle")
@@ -189,10 +204,14 @@ async def worker_artifacts(
             doc = session.scalars(select(Document).where(Document.id == document_id).with_for_update()).first()
             if not doc or doc.status != "processing" or doc.lease_token != x_worker_lease:
                 raise HTTPException(409, "worker lease is not active")
+            archive_graph(doc)
             doc.graph_key = graph_key
             doc.schema_key = schema_key
             doc.ontology_version = x_ontology_version
-            doc.status = "completed"
+            doc.quality_json = json.dumps(quality, ensure_ascii=False)
+            doc.reviewed_at = None
+            doc.review_note = None
+            doc.status = "needs_review"
             doc.stage = None
             doc.error = None
             doc.lease_until = None
@@ -204,7 +223,34 @@ async def worker_artifacts(
         except Exception:
             logger.exception("Could not clean up worker artifacts after a failed commit")
         raise
-    return {"id": document_id, "status": "completed"}
+    return {"id": document_id, "status": "needs_review"}
+
+
+@app.get("/v1/documents/{document_id}/quality", tags=["Documents"])
+def document_quality(document_id: str):
+    doc = get_document(document_id)
+    if not doc:
+        raise HTTPException(404, "document not found")
+    if doc.quality_json:
+        return json.loads(doc.quality_json)
+    if doc.status == "completed" and doc.graph_key:
+        return {**graph_quality_report(graph_for(document_id)), "legacy_published": True}
+    raise HTTPException(409, "quality report is not ready")
+
+
+@app.post("/v1/documents/{document_id}/publish", response_model=DocumentOut, tags=["Documents"])
+def publish_document(document_id: str, decision: PublishRequest):
+    with Session.begin() as session:
+        doc = session.scalars(select(Document).where(Document.id == document_id).with_for_update()).first()
+        if not doc:
+            raise HTTPException(404, "document not found")
+        if doc.status != "needs_review" or not doc.graph_key or not doc.schema_key or not doc.quality_json:
+            raise HTTPException(409, "document is not ready for review publication")
+        doc.status = "completed"
+        doc.reviewed_at = datetime.now(timezone.utc)
+        doc.review_note = decision.note.strip()
+        doc.updated_at = doc.reviewed_at
+        return document_data(doc)
 
 
 @app.delete("/v1/documents/{document_id}", status_code=204, tags=["Documents"])
@@ -215,7 +261,9 @@ def delete_document(document_id: str):
             raise HTTPException(404, "document not found")
         if doc.status == "processing":
             raise HTTPException(409, "processing document cannot be deleted yet")
-        delete_bytes([key for key in (doc.source_key, doc.graph_key, doc.schema_key) if key])
+        history = json.loads(doc.graph_history_json) if doc.graph_history_json else []
+        delete_bytes([key for key in (doc.source_key, doc.graph_key, doc.schema_key,
+                                      *(item["graph_key"] for item in history)) if key])
         session.delete(doc)
     return Response(status_code=204)
 
@@ -225,13 +273,63 @@ def graph(document_id: str):
     doc = get_document(document_id)
     if not doc:
         raise HTTPException(404, "document not found")
-    if doc.status != "completed" or not doc.graph_key:
+    if doc.status not in ("completed", "needs_review") or not doc.graph_key:
         raise HTTPException(409, "graph is not ready")
     graph_data = get_bytes(doc.graph_key)
     parsed = Graph().parse(data=graph_data.decode("utf-8"), format="turtle")
+    headers = {"ETag": _graph_etag(doc)}
     if normalize_document_graph(parsed, doc.filename):
-        return Response(parsed.serialize(format="turtle"), media_type="text/turtle")
-    return Response(graph_data, media_type="text/turtle")
+        return Response(parsed.serialize(format="turtle"), media_type="text/turtle", headers=headers)
+    return Response(graph_data, media_type="text/turtle", headers=headers)
+
+
+def _graph_etag(doc: Document) -> str:
+    raw = f"{doc.graph_key}|{doc.updated_at.isoformat() if doc.updated_at else ''}"
+    return '"' + hashlib.sha256(raw.encode()).hexdigest() + '"'
+
+
+@app.put("/v1/documents/{document_id}/graph", response_model=DocumentOut, tags=["Knowledge Graph"],
+         openapi_extra={"requestBody": {"required": True, "content": {"text/turtle": {"schema": {"type": "string"}}}}})
+async def replace_document_graph(document_id: str, request: Request, if_match: str | None = Header(default=None)):
+    if not if_match:
+        raise HTTPException(428, "If-Match from GET /graph is required")
+    if not request.headers.get("content-type", "").startswith("text/turtle"):
+        raise HTTPException(415, "Content-Type must be text/turtle")
+    old = get_document(document_id)
+    if not old:
+        raise HTTPException(404, "document not found")
+    if old.status not in ("completed", "needs_review") or not old.graph_key:
+        raise HTTPException(409, "document graph is not ready for correction")
+    if if_match != _graph_etag(old):
+        raise HTTPException(412, "graph changed; fetch its latest ETag")
+    payload = await request.body()
+    if not payload or len(payload) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "corrected graph exceeds upload limit")
+    try:
+        parsed = Graph().parse(data=payload.decode("utf-8"), format="turtle")
+        normalize_document_graph(parsed, old.filename)
+        validate_instance_graph(parsed)
+    except Exception as exc:
+        raise HTTPException(422, f"invalid corrected graph: {exc}") from exc
+    quality = graph_quality_report(parsed, {"manual_correction": True})
+    key = put_bytes(f"graphs/{document_id}/corrections/{uuid4().hex}/world.ttl",
+                    parsed.serialize(format="turtle").encode("utf-8"), "text/turtle")
+    try:
+        with Session.begin() as session:
+            doc = session.scalars(select(Document).where(Document.id == document_id).with_for_update()).first()
+            if not doc or doc.status not in ("completed", "needs_review") or _graph_etag(doc) != if_match:
+                raise HTTPException(412, "graph changed; fetch its latest ETag")
+            archive_graph(doc)
+            doc.graph_key = key
+            doc.quality_json = json.dumps(quality, ensure_ascii=False)
+            doc.status = "needs_review"
+            doc.reviewed_at = None
+            doc.review_note = None
+            doc.updated_at = datetime.now(timezone.utc)
+            return document_data(doc)
+    except Exception:
+        delete_bytes([key])
+        raise
 
 
 @app.get("/v1/documents/{document_id}/schema", tags=["Knowledge Graph"], responses={200: {"content": {"text/turtle": {"schema": {"type": "string"}}}}})
@@ -239,7 +337,7 @@ def schema(document_id: str):
     doc = get_document(document_id)
     if not doc:
         raise HTTPException(404, "document not found")
-    if doc.status != "completed" or not doc.schema_key:
+    if doc.status not in ("completed", "needs_review") or not doc.schema_key:
         raise HTTPException(409, "schema is not ready")
     return Response(valid_schema_turtle(get_bytes(doc.schema_key), document_id), media_type="text/turtle")
 
@@ -255,6 +353,9 @@ def retry_document(document_id: str):
         doc.status = "queued"
         doc.stage = None
         doc.error = None
+        doc.quality_json = None
+        doc.reviewed_at = None
+        doc.review_note = None
         doc.attempts = 0
         doc.lease_until = None
         doc.updated_at = datetime.now(timezone.utc)
@@ -272,6 +373,9 @@ def reprocess_document(document_id: str):
         doc.status = "queued"
         doc.stage = None
         doc.error = None
+        doc.quality_json = None
+        doc.reviewed_at = None
+        doc.review_note = None
         doc.attempts = 0
         doc.lease_until = None
         doc.lease_token = None

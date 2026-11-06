@@ -1,6 +1,8 @@
 # OntoRAG 文件知识图谱服务
 
-面向单一业务系统的 API：上传文档后，后台 worker 用 [OntoRAG](https://github.com/ontorag/ontorag) 执行 `ingest` 与 `extract-instances`。全部制度共用版本化的[法务与审计领域本体](ontorag_service/resources/legal_audit_v1.json)，文档图只记录实体、关系、属性与原文出处。REST 与 MCP 支持跨文件查询。模型配置为 DeepSeek `deepseek-flash`。领域模型的范围与数据分层见[本体建模说明](docs/DOMAIN_ONTOLOGY.md)。
+面向单一业务系统的 API：上传文档后，后台 worker 用 [OntoRAG](https://github.com/ontorag/ontorag) 执行 `ingest`，并调用其抽取与 RDF 转换模块生成实例图。全部制度共用版本化的[法务与审计领域本体](ontorag_service/resources/legal_audit_v1.json)，文档图只记录实体、关系、属性与原文出处。REST 与 MCP 支持跨文件查询。模型配置为 DeepSeek `deepseek-flash`。领域模型的范围与数据分层见[本体建模说明](docs/DOMAIN_ONTOLOGY.md)。
+
+新文件现在走 `queued → processing → needs_review → completed`。抽取时增加领域约束与候选事实检查，生成质量报告；只有复核后调用发布接口，图才进入跨文件查询。`GET /v1/documents/{id}/quality` 查看问题，`GET /v1/documents/{id}/graph` 获取待复核图；可通过带 `If-Match` 的 `PUT /v1/documents/{id}/graph` 提交修正，最后 `POST /v1/documents/{id}/publish` 发布。原有已发布文档不变。详细请求见[外部系统对接说明](docs/INTEGRATION.md)。
 
 ## 本地运行
 

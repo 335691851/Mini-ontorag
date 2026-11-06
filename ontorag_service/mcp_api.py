@@ -1,8 +1,10 @@
 from fastmcp import FastMCP
 
 from .db import get_document, document_data, list_documents
-from .graph import describe, select_query, select_domain_query, domain_summary
+from .graph import describe, graph_for, select_query, select_domain_query, domain_summary
 from .domain import schema_card
+from .quality import graph_quality_report
+import json
 
 mcp = FastMCP("OntoRAG Knowledge Graph")
 
@@ -20,6 +22,19 @@ def get_knowledge_document(document_id: str) -> dict:
     if not doc:
         raise ValueError("document not found")
     return document_data(doc)
+
+
+@mcp.tool
+def get_document_quality(document_id: str) -> dict:
+    """Inspect extraction quality and review issues before publishing a graph."""
+    doc = get_document(document_id)
+    if not doc:
+        raise ValueError("document not found")
+    if doc.quality_json:
+        return json.loads(doc.quality_json)
+    if doc.status == "completed" and doc.graph_key:
+        return {**graph_quality_report(graph_for(document_id)), "legacy_published": True}
+    raise ValueError("quality report is not ready")
 
 
 @mcp.tool

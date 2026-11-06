@@ -15,7 +15,7 @@ def graph_for(document_id: str) -> Graph:
     doc = get_document(document_id)
     if not doc:
         raise FileNotFoundError("document not found")
-    if doc.status != "completed" or not doc.graph_key:
+    if doc.status not in ("completed", "needs_review") or not doc.graph_key:
         raise FileNotFoundError("document graph is not ready")
     graph = Graph()
     if doc.schema_key:

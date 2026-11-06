@@ -55,7 +55,21 @@ class IntegrationTest(unittest.TestCase):
                 self.assertEqual(again.json()["id"], doc_id)
                 with patch.object(worker, "_cli", return_value="ontorag"), patch.object(worker, "_run_cli", side_effect=fake_stage):
                     self.assertTrue(worker.run_once())
+                self.assertEqual(client.get(f"/v1/documents/{doc_id}", headers=headers).json()["status"], "needs_review")
+                quality = client.get(f"/v1/documents/{doc_id}/quality", headers=headers)
+                self.assertEqual(quality.status_code, 200)
+                self.assertEqual(quality.json()["metrics"]["entities"], 1)
+                self.assertEqual(client.get("/v1/knowledge-graph/summary", headers=headers).json()["documents"], 0)
+                self.assertEqual(client.post(f"/v1/documents/{doc_id}/publish", headers=headers, json={"note": "Reviewed source quote and entity"}).status_code, 200)
                 self.assertEqual(client.get(f"/v1/documents/{doc_id}", headers=headers).json()["status"], "completed")
+                graph_response = client.get(f"/v1/documents/{doc_id}/graph", headers=headers)
+                self.assertTrue(graph_response.headers.get("ETag"))
+                corrected = client.put(f"/v1/documents/{doc_id}/graph", headers={**headers, "Content-Type": "text/turtle", "If-Match": graph_response.headers["ETag"]}, content=graph_response.content)
+                self.assertEqual(corrected.status_code, 200)
+                self.assertEqual(corrected.json()["status"], "needs_review")
+                self.assertEqual(client.get("/v1/knowledge-graph/summary", headers=headers).json()["documents"], 0)
+                self.assertEqual(client.put(f"/v1/documents/{doc_id}/graph", headers={**headers, "Content-Type": "text/turtle", "If-Match": graph_response.headers["ETag"]}, content=graph_response.content).status_code, 412)
+                self.assertEqual(client.post(f"/v1/documents/{doc_id}/publish", headers=headers, json={"note": "Approved corrected Turtle graph"}).status_code, 200)
                 self.assertEqual(client.get(f"/v1/documents/{doc_id}", headers=headers).json()["ontology_version"], "legal-audit-v1")
                 self.assertIn("alice", client.get(f"/v1/documents/{doc_id}/graph", headers=headers).text)
                 self.assertIn("Role", client.get(f"/v1/documents/{doc_id}/schema", headers=headers).text)
@@ -86,7 +100,7 @@ class IntegrationTest(unittest.TestCase):
                 source_url = f"/v1/internal/documents/{internal}/source"
                 artifact_url = f"/v1/internal/documents/{internal}/artifacts"
                 self.assertEqual(client.get(source_url, headers=headers).status_code, 409)
-                internal_headers = {**headers, "X-Worker-Lease": internal_token}
+                internal_headers = {**headers, "X-Worker-Lease": internal_token, "X-Ontology-Version": "legal-audit-v1"}
                 self.assertEqual(client.get(source_url, headers=internal_headers).content, b"Worker source")
                 self.assertEqual(client.post(artifact_url, headers=headers, files={}).status_code, 422)
                 artifacts = client.post(artifact_url, headers=internal_headers, files={
@@ -94,11 +108,12 @@ class IntegrationTest(unittest.TestCase):
                     "schema": ("schema.ttl", schema_turtle(), "text/turtle"),
                 })
                 self.assertEqual(artifacts.status_code, 200)
-                self.assertEqual(client.get(f"/v1/documents/{internal}", headers=headers).json()["status"], "completed")
+                self.assertEqual(client.get(f"/v1/documents/{internal}", headers=headers).json()["status"], "needs_review")
+                self.assertEqual(client.post(f"/v1/documents/{internal}/publish", headers=headers, json={"note": "Reviewed internal sample graph"}).status_code, 200)
                 summary = client.get("/v1/knowledge-graph/summary", headers=headers)
-                self.assertEqual(summary.json()["documents"], 1)
+                self.assertEqual(summary.json()["documents"], 2)
                 domain_query = client.post("/v1/knowledge-graph/sparql", headers=headers, content=f"SELECT ?s WHERE {{ ?s a <{namespace}Role> }}")
-                self.assertEqual(len(domain_query.json()["results"]["bindings"]), 1)
+                self.assertEqual(len(domain_query.json()["results"]["bindings"]), 2)
                 self.assertIn("alice", domain_query.text)
                 self.assertEqual(client.get(source_url, headers=internal_headers).status_code, 409)
                 self.assertEqual(client.delete(f"/v1/documents/{doc_id}", headers=headers).status_code, 204)
