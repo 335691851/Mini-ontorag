@@ -109,6 +109,21 @@ class ClauseNormalizationTest(unittest.TestCase):
         self.assertIn((ns.previous, RDF.type, ns.PolicyDocument), graph)
         self.assertEqual(len(set(graph.objects(ns.current1, ns.referenceNumber)) | set(graph.objects(ns.current2, ns.referenceNumber))), 1)
 
+    def test_heading_without_rule_is_kept_only_as_source_annotation(self):
+        ns = Namespace(schema_card()["namespace"])
+        graph = Graph()
+        graph.add((ns.heading1, RDF.type, ns.PolicyClause))
+        graph.add((ns.heading1, RDFS.label, Literal("主要经验教训")))
+        graph.add((ns.heading1, ns.clauseText, Literal("主要经验教训")))
+        graph.add((ns.heading1, PROVENANCE.hasMention, ns.mention1))
+        graph.add((ns.document1, RDF.type, ns.PolicyDocument))
+        graph.add((ns.document1, ns.hasClause, ns.heading1))
+
+        self.assertEqual(normalize_document_graph(graph, "example.pdf"), 1)
+        self.assertNotIn((ns.heading1, RDF.type, ns.PolicyClause), graph)
+        self.assertNotIn((ns.document1, ns.hasClause, ns.heading1), graph)
+        self.assertIn((ns.mention1, PROVENANCE.sectionHeading, Literal("主要经验教训")), graph)
+
 
 if __name__ == "__main__":
     unittest.main()

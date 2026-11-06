@@ -196,8 +196,32 @@ def merge_duplicate_policy_documents(graph: Graph) -> int:
     return merged
 
 
+def remove_heading_only_clauses(graph: Graph) -> int:
+    """Keep section headings as citations when they assert no rule or relation."""
+    namespace = Namespace(schema_card()["namespace"])
+    object_properties = {namespace[item["name"]] for item in schema_card()["object_properties"]}
+    normative_terms = ("应当", "必须", "不得", "包括", "是指", "负责", "适用", "可以", "需要", "严禁", "禁止", "施行", "执行", "划分", "认定")
+    removed = 0
+    for clause in list(graph.subjects(RDF.type, namespace.PolicyClause)):
+        label = str(graph.value(clause, RDFS.label) or "").strip()
+        text = str(graph.value(clause, namespace.clauseText) or "").strip()
+        if not label or label != text or len(label) >= 25 or any(mark in label for mark in "。；;，,：:") or any(term in label for term in normative_terms):
+            continue
+        if any(predicate in object_properties for predicate, _ in graph.predicate_objects(clause)):
+            continue
+        for mention in graph.objects(clause, PROVENANCE.hasMention):
+            graph.add((mention, PROVENANCE.sectionHeading, Literal(label)))
+        for triple in list(graph.triples((clause, None, None))):
+            graph.remove(triple)
+        for triple in list(graph.triples((None, None, clause))):
+            graph.remove(triple)
+        removed += 1
+    return removed
+
+
 def normalize_document_graph(graph: Graph, filename: str) -> int:
     changed = normalize_policy_clauses(graph)
+    changed += remove_heading_only_clauses(graph)
     changed += resolve_reference_numbers(graph, filename)
     changed += merge_duplicate_policy_documents(graph)
     return changed
