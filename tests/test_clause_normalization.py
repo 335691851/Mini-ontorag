@@ -32,6 +32,20 @@ class ClauseNormalizationTest(unittest.TestCase):
         self.assertIn((ns.rule1, RDF.type, ns.PolicyClause), graph)
         validate_instance_graph(graph)
 
+    def test_ambiguous_numbers_are_not_assigned_to_business_entity(self):
+        ns = Namespace(schema_card()["namespace"])
+        graph = Graph()
+        graph.add((ns.clause1, RDF.type, ns.PolicyClause))
+        graph.add((ns.clause1, ns.clauseNumber, Literal("第一条")))
+        graph.add((ns.clause1, ns.clauseNumber, Literal("第二条")))
+        graph.add((ns.clause1, ns.imposesObligation, ns.duty1))
+        graph.add((ns.clause1, PROVENANCE.hasMention, ns.mention1))
+        graph.add((ns.duty1, RDF.type, ns.Obligation))
+
+        self.assertEqual(remove_number_only_clauses(graph), 1)
+        self.assertFalse(list(graph.objects(ns.duty1, PROVENANCE.sourceClauseNumber)))
+        self.assertEqual({str(value) for value in graph.objects(ns.mention1, PROVENANCE.clauseNumber)}, {"第一条", "第二条"})
+
 
 if __name__ == "__main__":
     unittest.main()

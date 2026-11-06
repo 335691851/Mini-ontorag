@@ -31,7 +31,8 @@ def remove_number_only_clauses(graph: Graph) -> int:
             continue
         if not labels and not any(ARTICLE_NUMBER.fullmatch(str(number).strip()) for number in numbers):
             continue
-        numbers = numbers or [Literal(labels[0])]
+        numbers = [Literal(labels[0])] if labels else numbers
+        unambiguous_number = numbers if len(set(numbers)) == 1 else []
         mentions = list(graph.objects(clause, PROVENANCE.hasMention))
         sources = list(graph.objects(clause, PROVENANCE.attestedIn))
         targets = {
@@ -48,7 +49,7 @@ def remove_number_only_clauses(graph: Graph) -> int:
                 graph.add((mention, PROVENANCE.mentions, target))
             for source in sources:
                 graph.add((target, PROVENANCE.attestedIn, source))
-            for number in numbers:
+            for number in unambiguous_number:
                 graph.add((target, PROVENANCE.sourceClauseNumber, number))
         for triple in list(graph.triples((clause, None, None))):
             graph.remove(triple)
