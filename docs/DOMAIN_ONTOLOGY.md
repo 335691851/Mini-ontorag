@@ -10,7 +10,7 @@
 | 法务 | `Contract`、`ContractReview`、`LegalDisputeCase`、`LegalOpinion` | `reviewsContract`、`involvesContract`、`handledBy` |
 | 审计与整改 | `AuditProject`、`AuditFinding`、`AuditReport`、`RectificationAction`、`AccountabilityAction` | `producesFinding`、`findingEvidence`、`requiresRectification`、`triggersAccountability` |
 
-`PolicyClause` 是规则的定位单元。例如，某制度条款规定一项审查职责：条款通过 `definesResponsibility` 连接职责，职责再通过 `responsibilityOfRole` 连接岗位。另一个文件提到同一类岗位时仍使用 `Role` 这个类，因此可按全领域类型查询。审计发现与整改措施则通过 `requiresRectification` 连接，原文引用随实例保留。
+`PolicyClause` 只用于有实际规则名称的条款；单独的“第一条”“第二条”等编号不是领域实体。抽取后会清除纯编号条款节点，将编号作为 `https://ontorag.org/provenance#sourceClauseNumber` 来源属性附到其连接的业务实体上，并把条款的原文引用和来源文件转给这些实体。旧版已存图在读取、SPARQL 查询和离线查看器生成时也执行同一规则，无需重新调用模型。若该条没有抽出业务实体，编号仍留在原文引用节点，不增加领域实体。另一个文件提到同一类岗位时仍使用 `Role` 这个类，因此可按全领域类型查询。审计发现与整改措施通过 `requiresRectification` 连接，原文引用随实例保留。
 
 ## 数据分层
 

@@ -46,6 +46,8 @@ notepad .env
 
 在线接口 `GET /v1/ontology/ttl` 返回共用本体；`GET /v1/documents/{id}/graph` 返回每份文件的事实与出处，均需 Bearer 密钥。`GET /v1/knowledge-graph/summary` 和 `POST /v1/knowledge-graph/sparql` 查询整个领域知识图谱。离线查看器由 `scripts/build_graph_viewer.py` 从下载的 Turtle 文件生成，默认显示整个领域本体；在“全部制度”范围可切换到全域实体关系，也可选择单份文件查看实例和原文依据。重新抽取后应重新下载全部图再生成查看器。
 
+“第 X 条”这类纯条款编号作为来源信息保存，不作为领域实体；现有图在查询和导出时自动归一化。业务实体可通过 `https://ontorag.org/provenance#sourceClauseNumber` 查询来源条款编号，并通过 `https://ontorag.org/provenance#hasMention` 查询原文引用。
+
 ```powershell
 $viewer = 'C:\path\to\知识图谱查看' # 改为本机实际目录
 .\.venv\Scripts\python.exe scripts\build_graph_viewer.py --manifest (Join-Path $viewer '导入记录.json') --graphs (Join-Path $viewer 'rdf_domain') --d3 (Join-Path $viewer 'assets\d3.min.js') --output (Join-Path $viewer '领域知识图谱.html')

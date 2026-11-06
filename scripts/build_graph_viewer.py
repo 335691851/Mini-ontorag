@@ -4,12 +4,16 @@ import argparse
 import csv
 import json
 import html as html_module
+import sys
 from collections import Counter
 from pathlib import Path
 from urllib.parse import unquote
 
 from rdflib import Graph, Namespace, URIRef
 from rdflib.namespace import OWL, RDF, RDFS
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from ontorag_service.domain import PROVENANCE, remove_number_only_clauses
 
 
 ORP = Namespace("https://ontorag.org/provenance#")
@@ -40,6 +44,7 @@ def document_data(doc: dict, graph_dir: Path) -> dict:
     graph_path = graph_dir / f"{document_id}.graph.ttl"
     graph_text = graph_path.read_text(encoding="utf-8")
     graph.parse(data=graph_text, format="turtle")
+    remove_number_only_clauses(graph)
     schema.parse(graph_dir / f"{document_id}.schema.ttl", format="turtle")
     classes = {subject for subject in schema.subjects(RDF.type, OWL.Class) if isinstance(subject, URIRef)}
     if not classes:
@@ -55,6 +60,7 @@ def document_data(doc: dict, graph_dir: Path) -> dict:
         entity_classes = sorted({name(kind) for kind in graph.objects(entity, RDF.type) if str(kind).startswith(base)})
         attrs = [{"name": name(predicate), "value": str(value)} for predicate, value in graph.predicate_objects(entity)
                  if predicate != RDFS.label and str(predicate).startswith(base) and not isinstance(value, URIRef)]
+        attrs.extend({"name": "来源条款编号", "value": str(value)} for value in graph.objects(entity, PROVENANCE.sourceClauseNumber))
         nodes.append({
             "id": str(entity),
             "label": str(graph.value(entity, RDFS.label) or name(entity)),

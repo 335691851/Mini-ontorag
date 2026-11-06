@@ -8,7 +8,7 @@ from sqlalchemy import select
 from .db import Document, Session, get_document
 from .storage import get_bytes
 from .ontology import valid_schema_turtle
-from .domain import ONTOLOGY_VERSION, schema_card, schema_turtle
+from .domain import ONTOLOGY_VERSION, schema_card, schema_turtle, remove_number_only_clauses
 
 
 def graph_for(document_id: str) -> Graph:
@@ -21,6 +21,7 @@ def graph_for(document_id: str) -> Graph:
     if doc.schema_key:
         graph.parse(data=valid_schema_turtle(get_bytes(doc.schema_key), document_id).decode("utf-8"), format="turtle")
     graph.parse(data=get_bytes(doc.graph_key).decode("utf-8"), format="turtle")
+    remove_number_only_clauses(graph)
     return graph
 
 
@@ -34,6 +35,7 @@ def domain_graph() -> tuple[Graph, list[str]]:
     graph.parse(data=schema_turtle().decode("utf-8"), format="turtle")
     for _, key in keys:
         graph.parse(data=get_bytes(key).decode("utf-8"), format="turtle")
+    remove_number_only_clauses(graph)
     return graph, [doc_id for doc_id, _ in keys]
 
 

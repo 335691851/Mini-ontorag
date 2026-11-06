@@ -17,7 +17,7 @@ from .graph import describe, select_query, select_domain_query, domain_summary
 from .storage import delete_bytes, get_bytes, put_bytes
 from .mcp_api import mcp
 from .ontology import valid_schema_turtle
-from .domain import ONTOLOGY_VERSION, schema_card, schema_turtle, validate_instance_graph
+from .domain import ONTOLOGY_VERSION, schema_card, schema_turtle, validate_instance_graph, remove_number_only_clauses
 from rdflib import Graph
 
 ALLOWED = {".md", ".txt", ".html", ".htm", ".epub", ".pdf"}
@@ -174,6 +174,8 @@ async def worker_artifacts(
     if x_ontology_version:
         try:
             parsed_graph = Graph().parse(data=graph_data.decode("utf-8"), format="turtle")
+            if remove_number_only_clauses(parsed_graph):
+                graph_data = parsed_graph.serialize(format="turtle").encode("utf-8")
             validate_instance_graph(parsed_graph)
             if set(Graph().parse(data=schema_data.decode("utf-8"), format="turtle")) != set(Graph().parse(data=schema_turtle().decode("utf-8"), format="turtle")):
                 raise ValueError("schema does not match current domain ontology")
@@ -225,7 +227,11 @@ def graph(document_id: str):
         raise HTTPException(404, "document not found")
     if doc.status != "completed" or not doc.graph_key:
         raise HTTPException(409, "graph is not ready")
-    return Response(get_bytes(doc.graph_key), media_type="text/turtle")
+    graph_data = get_bytes(doc.graph_key)
+    parsed = Graph().parse(data=graph_data.decode("utf-8"), format="turtle")
+    if remove_number_only_clauses(parsed):
+        return Response(parsed.serialize(format="turtle"), media_type="text/turtle")
+    return Response(graph_data, media_type="text/turtle")
 
 
 @app.get("/v1/documents/{document_id}/schema", tags=["Knowledge Graph"], responses={200: {"content": {"text/turtle": {"schema": {"type": "string"}}}}})

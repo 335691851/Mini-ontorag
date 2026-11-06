@@ -1,6 +1,7 @@
 """The versioned vocabulary shared by legal and audit documents."""
 
 import json
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -10,6 +11,51 @@ from rdflib.namespace import OWL, RDF, RDFS, XSD
 
 CARD_PATH = Path(__file__).parent / "resources" / "legal_audit_v1.json"
 ONTOLOGY_VERSION = "legal-audit-v1"
+PROVENANCE = Namespace("https://ontorag.org/provenance#")
+ARTICLE_NUMBER = re.compile(r"^(?:第\s*)?[一二三四五六七八九十百千万零〇两0-9]+(?:之[一二三四五六七八九十0-9]+)?\s*条$")
+
+
+def remove_number_only_clauses(graph: Graph) -> int:
+    """Keep article numbers as provenance, not as domain entities.
+
+    OntoRAG sometimes labels a PolicyClause only ``第X条``. Its outgoing
+    semantic targets keep the citation and source; the locator node itself
+    is removed from the domain graph. This also normalizes older stored TTL.
+    """
+    namespace = Namespace(schema_card()["namespace"])
+    removed = 0
+    for clause in list(graph.subjects(RDF.type, namespace.PolicyClause)):
+        labels = [str(label).strip() for label in graph.objects(clause, RDFS.label)]
+        numbers = list(graph.objects(clause, namespace.clauseNumber))
+        if labels and not all(ARTICLE_NUMBER.fullmatch(label) for label in labels):
+            continue
+        if not labels and not any(ARTICLE_NUMBER.fullmatch(str(number).strip()) for number in numbers):
+            continue
+        numbers = numbers or [Literal(labels[0])]
+        mentions = list(graph.objects(clause, PROVENANCE.hasMention))
+        sources = list(graph.objects(clause, PROVENANCE.attestedIn))
+        targets = {
+            target for predicate, target in graph.predicate_objects(clause)
+            if str(predicate).startswith(str(namespace)) and isinstance(target, URIRef)
+            and predicate != RDF.type
+        }
+        for mention in mentions:
+            for number in numbers:
+                graph.add((mention, PROVENANCE.clauseNumber, number))
+        for target in targets:
+            for mention in mentions:
+                graph.add((target, PROVENANCE.hasMention, mention))
+                graph.add((mention, PROVENANCE.mentions, target))
+            for source in sources:
+                graph.add((target, PROVENANCE.attestedIn, source))
+            for number in numbers:
+                graph.add((target, PROVENANCE.sourceClauseNumber, number))
+        for triple in list(graph.triples((clause, None, None))):
+            graph.remove(triple)
+        for triple in list(graph.triples((None, None, clause))):
+            graph.remove(triple)
+        removed += 1
+    return removed
 
 
 @lru_cache(maxsize=1)

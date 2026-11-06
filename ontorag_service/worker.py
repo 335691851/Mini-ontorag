@@ -17,7 +17,7 @@ from sqlalchemy import or_, select, update
 
 from .db import Document, Session, init_db
 from .storage import get_bytes, put_bytes
-from .domain import ONTOLOGY_VERSION, schema_card, schema_turtle, validate_instance_graph
+from .domain import ONTOLOGY_VERSION, schema_card, schema_turtle, validate_instance_graph, remove_number_only_clauses
 
 
 def _api_client() -> tuple[str, dict[str, str]] | None:
@@ -163,6 +163,8 @@ def process_job(document_id: str, token: str, lost: Event) -> None:
         parsed.parse(graph, format="turtle")
         if len(parsed) == 0:
             raise RuntimeError("OntoRAG produced an empty instance graph")
+        if remove_number_only_clauses(parsed):
+            graph.write_text(parsed.serialize(format="turtle"), encoding="utf-8")
         validate_instance_graph(parsed)
         schema_graph = Graph()
         schema_graph.parse(schema, format="turtle")
