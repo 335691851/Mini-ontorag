@@ -207,7 +207,7 @@ def remove_heading_only_clauses(graph: Graph) -> int:
         text = str(graph.value(clause, namespace.clauseText) or "").strip()
         if not label or label != text or len(label) >= 25 or any(mark in label for mark in "。；;，,：:") or any(term in label for term in normative_terms):
             continue
-        if any(predicate in object_properties for predicate, _ in graph.predicate_objects(clause)):
+        if any(predicate in object_properties for predicate, _ in graph.predicate_objects(clause)) or any(graph.objects(clause, PROVENANCE.hasUnverifiedRelation)):
             continue
         for mention in graph.objects(clause, PROVENANCE.hasMention):
             graph.add((mention, PROVENANCE.sectionHeading, Literal(label)))
