@@ -8,7 +8,7 @@ from pathlib import Path
 from rdflib import Graph
 
 from scripts.build_graph_viewer import combined_instances, document_data
-from ontorag_service.domain import normalize_policy_clauses, resolve_reference_numbers, canonicalize_domain_entities
+from ontorag_service.domain import normalize_document_graph, canonicalize_domain_entities
 
 
 def export(manifest: Path, graph_dir: Path, output_dir: Path) -> dict:
@@ -28,8 +28,7 @@ def export(manifest: Path, graph_dir: Path, output_dir: Path) -> dict:
         elif set(current_schema) != set(schema):
             raise ValueError(f"Different ontology in document {document_id}")
         instance = Graph().parse(graph_dir / f"{document_id}.graph.ttl", format="turtle")
-        normalize_policy_clauses(instance)
-        resolve_reference_numbers(instance, Path(record["source"]).name)
+        normalize_document_graph(instance, Path(record["source"]).name)
         graph += instance
         docs.append(document_data(record, graph_dir))
     canonicalize_domain_entities(graph)

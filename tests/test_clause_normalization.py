@@ -3,7 +3,7 @@ import unittest
 from rdflib import Graph, Literal, Namespace
 from rdflib.namespace import OWL, RDF, RDFS
 
-from ontorag_service.domain import PROVENANCE, canonical_entity_iri, canonicalize_domain_entities, normalize_policy_clauses, resolve_reference_numbers, schema_card, validate_instance_graph
+from ontorag_service.domain import PROVENANCE, canonical_entity_iri, canonicalize_domain_entities, normalize_document_graph, normalize_policy_clauses, resolve_reference_numbers, schema_card, validate_instance_graph
 
 
 class ClauseNormalizationTest(unittest.TestCase):
@@ -93,6 +93,21 @@ class ClauseNormalizationTest(unittest.TestCase):
         self.assertIn((ns.org1, OWL.sameAs, canonical), graph)
         self.assertIsNone(canonical_entity_iri("Organization", "权属企业"))
         self.assertEqual(canonicalize_domain_entities(graph), 0)
+
+    def test_same_title_and_number_merge_but_other_edition_stays_distinct(self):
+        ns = Namespace(schema_card()["namespace"])
+        graph = Graph()
+        for node, number in ((ns.current1, "鲁银发〔2025〕26号"), (ns.current2, "鲁银发〔2025〕26 号"), (ns.previous, "鲁银发〔2024〕16号")):
+            graph.add((node, RDF.type, ns.PolicyDocument))
+            graph.add((node, RDFS.label, Literal("合同管理办法")))
+            graph.add((node, ns.referenceNumber, Literal(number)))
+        graph.add((ns.current2, PROVENANCE.hasMention, ns.mention1))
+
+        self.assertEqual(normalize_document_graph(graph, "合同管理办法（鲁银发〔2025〕26号）.pdf"), 2)
+        self.assertEqual(normalize_document_graph(graph, "合同管理办法（鲁银发〔2025〕26号）.pdf"), 0)
+        self.assertEqual(len(set(graph.subjects(RDF.type, ns.PolicyDocument))), 2)
+        self.assertIn((ns.previous, RDF.type, ns.PolicyDocument), graph)
+        self.assertEqual(len(set(graph.objects(ns.current1, ns.referenceNumber)) | set(graph.objects(ns.current2, ns.referenceNumber))), 1)
 
 
 if __name__ == "__main__":

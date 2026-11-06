@@ -148,17 +148,58 @@ def resolve_reference_numbers(graph: Graph, filename: str) -> int:
     namespace = Namespace(schema_card()["namespace"])
     changed = 0
     for document in graph.subjects(RDF.type, namespace.PolicyDocument):
+        for value in list(graph.objects(document, namespace.referenceNumber)):
+            compact = re.sub(r"\s+", "", str(value))
+            if compact != str(value):
+                graph.remove((document, namespace.referenceNumber, value))
+                graph.add((document, namespace.referenceNumber, Literal(compact)))
+                graph.add((document, PROVENANCE.originalReferenceNumber, value))
+                changed += 1
         values = list(graph.objects(document, namespace.referenceNumber))
         if len({str(value) for value in values}) <= 1:
             continue
         title = str(graph.value(document, RDFS.label) or "").strip()
-        matches = [value for value in values if str(value) in filename] if title and title in filename else []
+        compact_filename = re.sub(r"\s+", "", filename)
+        matches = [value for value in values if str(value) in compact_filename] if title and title in filename else []
         confirmed = matches[0] if len(matches) == 1 else None
         for value in values:
             if value != confirmed:
                 graph.remove((document, namespace.referenceNumber, value))
                 graph.add((document, PROVENANCE.unresolvedReferenceNumber, value))
                 changed += 1
+    return changed
+
+
+def merge_duplicate_policy_documents(graph: Graph) -> int:
+    """Merge document mentions only when title and document number agree."""
+    namespace = Namespace(schema_card()["namespace"])
+    groups: dict[tuple[str, str], list] = {}
+    for document in set(graph.subjects(RDF.type, namespace.PolicyDocument)):
+        title = str(graph.value(document, RDFS.label) or "").strip()
+        values = {re.sub(r"\s+", "", str(value)) for value in graph.objects(document, namespace.referenceNumber)}
+        if title and len(values) == 1:
+            groups.setdefault((title, next(iter(values))), []).append(document)
+    merged = 0
+    for documents in groups.values():
+        if len(documents) < 2:
+            continue
+        primary = sorted(documents, key=lambda node: (-len(list(graph.predicate_objects(node))), str(node)))[0]
+        for duplicate in documents:
+            if duplicate == primary:
+                continue
+            for subject, predicate, object_ in list(graph):
+                if subject == duplicate or object_ == duplicate:
+                    graph.remove((subject, predicate, object_))
+                    graph.add((primary if subject == duplicate else subject, predicate, primary if object_ == duplicate else object_))
+            graph.add((duplicate, OWL.sameAs, primary))
+            merged += 1
+    return merged
+
+
+def normalize_document_graph(graph: Graph, filename: str) -> int:
+    changed = normalize_policy_clauses(graph)
+    changed += resolve_reference_numbers(graph, filename)
+    changed += merge_duplicate_policy_documents(graph)
     return changed
 
 

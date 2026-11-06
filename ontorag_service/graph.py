@@ -8,7 +8,7 @@ from sqlalchemy import select
 from .db import Document, Session, get_document
 from .storage import get_bytes
 from .ontology import valid_schema_turtle
-from .domain import ONTOLOGY_VERSION, schema_card, schema_turtle, normalize_policy_clauses, resolve_reference_numbers, canonicalize_domain_entities
+from .domain import ONTOLOGY_VERSION, schema_card, schema_turtle, normalize_document_graph, canonicalize_domain_entities
 
 
 def graph_for(document_id: str) -> Graph:
@@ -21,8 +21,7 @@ def graph_for(document_id: str) -> Graph:
     if doc.schema_key:
         graph.parse(data=valid_schema_turtle(get_bytes(doc.schema_key), document_id).decode("utf-8"), format="turtle")
     graph.parse(data=get_bytes(doc.graph_key).decode("utf-8"), format="turtle")
-    normalize_policy_clauses(graph)
-    resolve_reference_numbers(graph, doc.filename)
+    normalize_document_graph(graph, doc.filename)
     return graph
 
 
@@ -36,8 +35,7 @@ def domain_graph() -> tuple[Graph, list[str]]:
     graph.parse(data=schema_turtle().decode("utf-8"), format="turtle")
     for _, key, filename in keys:
         instance = Graph().parse(data=get_bytes(key).decode("utf-8"), format="turtle")
-        normalize_policy_clauses(instance)
-        resolve_reference_numbers(instance, filename)
+        normalize_document_graph(instance, filename)
         graph += instance
     canonicalize_domain_entities(graph)
     return graph, [doc_id for doc_id, _, _ in keys]

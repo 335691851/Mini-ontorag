@@ -13,7 +13,7 @@ from rdflib import Graph, Namespace, URIRef
 from rdflib.namespace import OWL, RDF, RDFS
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ontorag_service.domain import PROVENANCE, normalize_policy_clauses, resolve_reference_numbers, canonical_entity_iri
+from ontorag_service.domain import PROVENANCE, normalize_document_graph, canonical_entity_iri
 
 
 ORP = Namespace("https://ontorag.org/provenance#")
@@ -44,8 +44,7 @@ def document_data(doc: dict, graph_dir: Path) -> dict:
     graph_path = graph_dir / f"{document_id}.graph.ttl"
     graph_text = graph_path.read_text(encoding="utf-8")
     graph.parse(data=graph_text, format="turtle")
-    normalize_policy_clauses(graph)
-    resolve_reference_numbers(graph, Path(doc["source"]).name)
+    normalize_document_graph(graph, Path(doc["source"]).name)
     schema.parse(graph_dir / f"{document_id}.schema.ttl", format="turtle")
     classes = {subject for subject in schema.subjects(RDF.type, OWL.Class) if isinstance(subject, URIRef)}
     if not classes:

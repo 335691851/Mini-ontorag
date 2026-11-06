@@ -17,7 +17,7 @@ from .graph import describe, select_query, select_domain_query, domain_summary
 from .storage import delete_bytes, get_bytes, put_bytes
 from .mcp_api import mcp
 from .ontology import valid_schema_turtle
-from .domain import ONTOLOGY_VERSION, schema_card, schema_turtle, validate_instance_graph, normalize_policy_clauses, resolve_reference_numbers
+from .domain import ONTOLOGY_VERSION, schema_card, schema_turtle, validate_instance_graph, normalize_document_graph
 from rdflib import Graph
 
 ALLOWED = {".md", ".txt", ".html", ".htm", ".epub", ".pdf"}
@@ -174,7 +174,7 @@ async def worker_artifacts(
     if x_ontology_version:
         try:
             parsed_graph = Graph().parse(data=graph_data.decode("utf-8"), format="turtle")
-            if normalize_policy_clauses(parsed_graph) + resolve_reference_numbers(parsed_graph, worker_doc.filename):
+            if normalize_document_graph(parsed_graph, worker_doc.filename):
                 graph_data = parsed_graph.serialize(format="turtle").encode("utf-8")
             validate_instance_graph(parsed_graph)
             if set(Graph().parse(data=schema_data.decode("utf-8"), format="turtle")) != set(Graph().parse(data=schema_turtle().decode("utf-8"), format="turtle")):
@@ -229,7 +229,7 @@ def graph(document_id: str):
         raise HTTPException(409, "graph is not ready")
     graph_data = get_bytes(doc.graph_key)
     parsed = Graph().parse(data=graph_data.decode("utf-8"), format="turtle")
-    if normalize_policy_clauses(parsed) + resolve_reference_numbers(parsed, doc.filename):
+    if normalize_document_graph(parsed, doc.filename):
         return Response(parsed.serialize(format="turtle"), media_type="text/turtle")
     return Response(graph_data, media_type="text/turtle")
 
