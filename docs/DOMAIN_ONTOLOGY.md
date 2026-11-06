@@ -10,7 +10,7 @@
 | 法务 | `Contract`、`ContractReview`、`LegalDisputeCase`、`LegalOpinion` | `reviewsContract`、`involvesContract`、`handledBy` |
 | 审计与整改 | `AuditProject`、`AuditFinding`、`AuditReport`、`RectificationAction`、`AccountabilityAction` | `producesFinding`、`findingEvidence`、`requiresRectification`、`triggersAccountability` |
 
-`PolicyClause` 表示有正文内容的制度规则，“第一条”“第二条”等编号只是出处属性。抽取器若用编号作节点名称，系统会用唯一的条款正文重新命名规则实体，保留原有关联关系；编号记录在 `clauseNumber` 和 `https://ontorag.org/provenance#sourceClauseNumber`，原文引用也关联到业务目标。仅重复标题、没有规则内容或领域关系的章节标题留作引用标注，不作为规则实体。若一个节点混合多条正文和编号，系统不猜测它们之间的对应关系，而将编号留在引用节点并移除有歧义的领域节点。关系目标类型不符合本体时，原断言记录为 `https://ontorag.org/provenance#UnverifiedRelation`，不当作已确认的领域关系。旧图在读取、SPARQL 查询和离线导出时执行相同规则，无需重新调用模型。
+`PolicyClause` 表示有正文内容的制度规则，“第一条”“第二条”等编号只是出处属性。抽取器若用编号作节点名称，系统会用唯一的条款正文重新命名规则实体，保留原有关联关系；编号记录在 `clauseNumber` 和 `https://ontorag.org/provenance#sourceClauseNumber`，原文引用也关联到业务目标。仅重复标题、没有规则内容或领域关系的章节标题留作引用标注，不作为规则实体。若一个节点混合多条正文和编号，系统先用原文引用中的编号及正文片段逐条拆分；只有业务目标在唯一条款正文中出现时才恢复关系，不能唯一定位的原断言记录为 `https://ontorag.org/provenance#UnverifiedRelation`。关系目标类型不符合本体时也按同样方式保留待核实记录，不当作已确认的领域关系。旧图在读取、SPARQL 查询和离线导出时执行相同规则，无需重新调用模型。
 
 ## 数据分层
 

@@ -13,7 +13,9 @@ from rdflib.namespace import OWL, RDF, RDFS, XSD
 CARD_PATH = Path(__file__).parent / "resources" / "legal_audit_v1.json"
 ONTOLOGY_VERSION = "legal-audit-v1"
 PROVENANCE = Namespace("https://ontorag.org/provenance#")
+ANNOTATION = Namespace("http://www.w3.org/ns/oa#")
 ARTICLE_NUMBER = re.compile(r"^(?:第\s*)?[一二三四五六七八九十百千万零〇两0-9]+(?:之[一二三四五六七八九十0-9]+)?\s*条$")
+ARTICLE_PREFIX = re.compile(r"^\s*(第\s*[一二三四五六七八九十百千万零〇两0-9]+(?:之[一二三四五六七八九十0-9]+)?\s*条)\s*(.+)")
 CURATED_ORGANIZATIONS = frozenset({"鲁银投资集团股份有限公司"})
 
 
@@ -44,6 +46,95 @@ def canonicalize_domain_entities(graph: Graph) -> int:
     for original, canonical in replacements.items():
         graph.add((original, OWL.sameAs, canonical))
     return len(replacements)
+
+
+def split_merged_clauses(graph: Graph) -> int:
+    """Split a conflated node only when every source quote identifies one text."""
+    namespace = Namespace(schema_card()["namespace"])
+    properties = {namespace[item["name"]] for item in schema_card()["object_properties"]}
+    changed = 0
+    for merged in list(graph.subjects(RDF.type, namespace.PolicyClause)):
+        texts = {str(value).strip() for value in graph.objects(merged, namespace.clauseText)}
+        numbers = {str(value).strip() for value in graph.objects(merged, namespace.clauseNumber)}
+        mentions = list(graph.objects(merged, PROVENANCE.hasMention))
+        if len(texts) < 2 or len(texts) != len(numbers) or len(mentions) != len(texts):
+            continue
+        pairs = {}
+        for mention in mentions:
+            quotes = [str(quote) for target in graph.objects(mention, ANNOTATION.hasTarget)
+                      for selector in graph.objects(target, ANNOTATION.hasSelector)
+                      for quote in graph.objects(selector, ANNOTATION.exact)]
+            matches = [ARTICLE_PREFIX.match(quote) for quote in quotes]
+            candidates = [(match.group(1).strip(), text) for match in matches if match
+                          for text in texts if match.group(2).strip() in text]
+            if len(candidates) != 1:
+                pairs = {}
+                break
+            number, text = candidates[0]
+            if number not in numbers or text in pairs:
+                pairs = {}
+                break
+            pairs[text] = (number, mention)
+        if len(pairs) != len(texts):
+            continue
+
+        sources = list(graph.objects(merged, PROVENANCE.attestedIn))
+        documents = list(graph.subjects(namespace.hasClause, merged))
+        relations = [(predicate, target) for predicate, target in graph.predicate_objects(merged) if predicate in properties]
+        for triple in list(graph.triples((merged, None, None))):
+            graph.remove(triple)
+        for triple in list(graph.triples((None, None, merged))):
+            graph.remove(triple)
+        graph.add((merged, RDF.type, PROVENANCE.AmbiguousClauseGroup))
+        for source in sources:
+            graph.add((merged, PROVENANCE.attestedIn, source))
+
+        new_rules = {}
+        for text, (number, mention) in pairs.items():
+            digest = sha256(f"{merged}|{number}|{text}".encode()).hexdigest()[:20]
+            rule = URIRef(f"{merged}/rule/{digest}")
+            new_rules[text] = (rule, number, mention)
+            graph.add((rule, RDF.type, namespace.PolicyClause))
+            graph.add((rule, RDFS.label, Literal(text[:90].rstrip() + ("…" if len(text) > 90 else ""), lang="zh")))
+            graph.add((rule, namespace.clauseText, Literal(text)))
+            graph.add((rule, namespace.clauseNumber, Literal(number)))
+            graph.add((rule, PROVENANCE.sourceClauseNumber, Literal(number)))
+            graph.add((rule, PROVENANCE.hasMention, mention))
+            graph.add((mention, PROVENANCE.mentions, rule))
+            graph.add((merged, PROVENANCE.hasMention, mention))
+            for source in sources:
+                graph.add((rule, PROVENANCE.attestedIn, source))
+            for document in documents:
+                graph.add((document, namespace.hasClause, rule))
+
+        for predicate, target in relations:
+            label = str(graph.value(target, RDFS.label) or "").strip()
+            target_quotes = [str(quote).strip() for mention in graph.objects(target, PROVENANCE.hasMention)
+                             for anchor in graph.objects(mention, ANNOTATION.hasTarget)
+                             for selector in graph.objects(anchor, ANNOTATION.hasSelector)
+                             for quote in graph.objects(selector, ANNOTATION.exact)]
+            candidates = {text for text in texts if (label and label in text)
+                          or any(len(quote) >= 5 and quote in text for quote in target_quotes)}
+            if len(candidates) == 1:
+                text = next(iter(candidates))
+                rule, number, mention = new_rules[text]
+                graph.add((rule, predicate, target))
+                graph.add((target, PROVENANCE.hasMention, mention))
+                graph.add((mention, PROVENANCE.mentions, target))
+                graph.add((target, PROVENANCE.sourceClauseNumber, Literal(number)))
+                for source in sources:
+                    graph.add((target, PROVENANCE.attestedIn, source))
+            else:
+                digest = sha256(f"{merged}|{predicate}|{target}".encode()).hexdigest()[:24]
+                assertion = PROVENANCE[f"unverified-relation/{digest}"]
+                graph.add((assertion, RDF.type, PROVENANCE.UnverifiedRelation))
+                graph.add((assertion, RDF.subject, merged))
+                graph.add((assertion, RDF.predicate, predicate))
+                graph.add((assertion, RDF.object, target))
+                graph.add((assertion, RDFS.comment, Literal("Merged clause: target cannot be assigned to one article from source text")))
+                graph.add((merged, PROVENANCE.hasUnverifiedRelation, assertion))
+        changed += 1
+    return changed
 
 
 def normalize_policy_clauses(graph: Graph) -> int:
@@ -220,7 +311,8 @@ def remove_heading_only_clauses(graph: Graph) -> int:
 
 
 def normalize_document_graph(graph: Graph, filename: str) -> int:
-    changed = normalize_policy_clauses(graph)
+    changed = split_merged_clauses(graph)
+    changed += normalize_policy_clauses(graph)
     changed += remove_heading_only_clauses(graph)
     changed += resolve_reference_numbers(graph, filename)
     changed += merge_duplicate_policy_documents(graph)

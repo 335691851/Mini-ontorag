@@ -3,7 +3,7 @@ import unittest
 from rdflib import Graph, Literal, Namespace
 from rdflib.namespace import OWL, RDF, RDFS
 
-from ontorag_service.domain import PROVENANCE, canonical_entity_iri, canonicalize_domain_entities, normalize_document_graph, normalize_policy_clauses, resolve_reference_numbers, schema_card, validate_instance_graph
+from ontorag_service.domain import ANNOTATION, PROVENANCE, canonical_entity_iri, canonicalize_domain_entities, normalize_document_graph, normalize_policy_clauses, resolve_reference_numbers, schema_card, validate_instance_graph
 
 
 class ClauseNormalizationTest(unittest.TestCase):
@@ -123,6 +123,39 @@ class ClauseNormalizationTest(unittest.TestCase):
         self.assertNotIn((ns.heading1, RDF.type, ns.PolicyClause), graph)
         self.assertNotIn((ns.document1, ns.hasClause, ns.heading1), graph)
         self.assertIn((ns.mention1, PROVENANCE.sectionHeading, Literal("主要经验教训")), graph)
+
+    def test_merged_clause_splits_only_evidence_matched_relations(self):
+        ns = Namespace(schema_card()["namespace"])
+        graph = Graph()
+        graph.add((ns.merged, RDF.type, ns.PolicyClause))
+        graph.add((ns.document1, RDF.type, ns.PolicyDocument))
+        graph.add((ns.document1, ns.hasClause, ns.merged))
+        for number, text, mention, selector in (
+            ("第一条", "公司应当建立合规制度。", ns.mention1, ns.selector1),
+            ("第二条", "审计部门应当编制审计报告。", ns.mention2, ns.selector2),
+        ):
+            graph.add((ns.merged, ns.clauseNumber, Literal(number)))
+            graph.add((ns.merged, ns.clauseText, Literal(text)))
+            graph.add((ns.merged, PROVENANCE.hasMention, mention))
+            graph.add((mention, ANNOTATION.hasTarget, selector))
+            graph.add((selector, ANNOTATION.hasSelector, selector))
+            graph.add((selector, ANNOTATION.exact, Literal(f"{number}  {text[:8]}")))
+        graph.add((ns.duty1, RDF.type, ns.Obligation))
+        graph.add((ns.duty1, RDFS.label, Literal("建立合规制度")))
+        graph.add((ns.merged, ns.imposesObligation, ns.duty1))
+        graph.add((ns.duty2, RDF.type, ns.Obligation))
+        graph.add((ns.duty2, RDFS.label, Literal("其他事项")))
+        graph.add((ns.merged, ns.imposesObligation, ns.duty2))
+
+        self.assertGreater(normalize_document_graph(graph, "example.pdf"), 0)
+        rules = list(graph.subjects(RDF.type, ns.PolicyClause))
+        self.assertEqual(len(rules), 2)
+        first = next(rule for rule in rules if str(graph.value(rule, ns.clauseNumber)) == "第一条")
+        self.assertIn((first, ns.imposesObligation, ns.duty1), graph)
+        self.assertEqual(len(list(graph.subjects(ns.imposesObligation, ns.duty2))), 0)
+        self.assertIn((ns.merged, RDF.type, PROVENANCE.AmbiguousClauseGroup), graph)
+        self.assertEqual(len(list(graph.objects(ns.merged, PROVENANCE.hasUnverifiedRelation))), 1)
+        validate_instance_graph(graph)
 
 
 if __name__ == "__main__":
